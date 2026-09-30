@@ -6,10 +6,13 @@ NVIDIA RTX 3050 Ti. This is a playable development alpha, with the limits below.
 
 ## Automated and build checks
 
-- Native C++ core: CMake/Ninja build and CTest pass (one test executable with
+- Native C++ core: CMake/Ninja build and CTest pass (two test executables with
   multiple assertions). Checks include 30 versus 144 FPS integration, normalized
   diagonals, jump height and gravity, creative hover/ascent, bounded gliding,
   attack recharge/critical conditions, and recipe transaction preflight.
+  Control-policy regressions reject every custom gameplay action during script,
+  AI, character-creation, furniture, and camera restrictions; distinguish pause
+  from a scene; and exercise a quest taking and releasing control mid-gameplay.
 - Windows plugin: clang-cl Release cross-build with pinned CommonLibSSE-NG,
   ImGui, vcpkg dependencies and Microsoft SDK/CRT. The normal build explicitly
   sets `VOXEL_PLAYTEST=OFF`; the command-file driver is development-only.
@@ -47,8 +50,8 @@ The following were observed in the actual game, not inferred from compilation:
 - The native magic-menu request closes that menu and opens the workbench.
 - Activating an alchemy station closes its original menu and opens the workbench
   after the first-use tutorial is dismissed. The player leaves the furniture and
-  the movement controller resumes. The handoff restores only control flags the
-  plugin owned before crafting saved its control state.
+  the movement controller resumes. Version 0.1.1 also passes this handoff and the
+  magic-menu check, without writing Skyrim's current or stored control flags.
 - Melee targets are picked through Skyrim's actual crosshair. The live bandit
   test records health 35 -> 27.43 -> 19.86 -> 12.30 -> 4.73 -> -2.84, followed by
   Skyrim's corpse search prompt. `Actor::DoDamage` applies the hit; the earlier
@@ -58,6 +61,36 @@ Local evidence is under ignored `local/testing/`: playtest logs, save hash audit
 and game-only screenshots. Development-driver captures run in the background at
 about 15 FPS; these are not a foreground performance benchmark. Foreground
 rendering was also observed, but no sustained performance benchmark is claimed.
+
+## 0.1.1 scripted-control regression
+
+The earlier alpha suppressed native input by changing global ControlMap flags.
+That could obscure a quest disabling the same controls. Camera and combat actions
+also ran before the movement eligibility check. Version 0.1.1 filters native input
+handlers only during ordinary custom gameplay and gates all custom actions on
+Skyrim's live control state. Scripted scenes restore normal gravity, stop velocity
+overrides, drop queued movement, and release the custom camera/model state.
+
+Live checks on the same runtime confirmed:
+
+- Keyboard button events through the actual input dispatcher moved the player,
+  jumped, and reached the native-handler filters during ordinary gameplay.
+- Disabling player controls while moving in creative flight immediately stopped
+  custom physics updates and restored controller gravity to 1. Camera, flight,
+  workbench, attack, and cast attempts remained blocked. F10 off/on did not change
+  Skyrim's `FFFFFBBE` control mask. Re-enabling controls resumed ordinary movement.
+- AI-driven player movement suspended the plugin even with all control flags
+  enabled. Ending AI control resumed the plugin.
+- Alchemy's first-use tutorial and native magic-menu replacement still returned
+  to the workbench with Skyrim's control flags intact.
+- Loaded both existing Helgen saves: the prisoner lineup before character
+  creation and the named-character autosave before the execution. Repeated W,
+  Space, Shift, F5/F6/F7/F8, attack, and cast attempts did not run custom physics
+  or change the scripted camera. The named-character save naturally progressed
+  through the walk to the block, execution animation, Alduin's arrival, and
+  `Make your way to the Keep`, without quest-stage or control-enabling commands.
+  Native walking remained available once the game released movement while
+  other introduction restrictions were still in place.
 
 ## Runtime setup and preservation
 
@@ -77,6 +110,10 @@ matched their backup hashes after the live tests. Tests use an unsaved temporary
 character; the installer does not modify save files. Crafting during ordinary
 play does alter inventory and learned spells through normal game APIs.
 
+Before the 0.1.1 fix, a second backup preserved all 43 current save-directory
+files, including the user's new Helgen character. The cutscene regression loaded
+those saves without overwriting them. All 43 file hashes still matched afterward.
+
 ## Remaining alpha limitations
 
 - Only the listed runtime, keyboard and mouse, and this Proton setup have been
@@ -92,6 +129,8 @@ play does alter inventory and learned spells through normal game APIs.
   evidence of targeting, health reduction and death, not AI combat balance.
 - Movement keeps Skyrim's collision controller. Interiors, jumping and flight
   have been exercised; a full terrain, ceiling, staircase, swimming, mount,
-  furniture, quest, and cutscene regression sweep has not been completed.
+  furniture and quest regression sweep has not been completed. The Helgen
+  execution sequence and simulated control/AI handoffs are now covered; other
+  campaign scenes remain untested.
 - Long campaign/save compatibility has not been established. Use a test
   character for experiments and retain the pre-install backup.

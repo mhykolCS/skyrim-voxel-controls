@@ -45,6 +45,13 @@ F10 restores those bindings. Ranged weapons and equipped native spells retain
 their native attack inputs. Alchemy stations and the magic menu open the new
 workbench while enabled; F10 gives access to the original menus.
 
+Version 0.1.1 automatically hands control back to Skyrim during cutscenes,
+scripted movement, character creation, and restricted camera or furniture states.
+Movement, flight, camera switching, custom combat, and the workbench wait until
+Skyrim releases control. F3 explains the suspension. Steve's visual replacement
+also steps aside for scripted animations and returns with ordinary gameplay.
+The plugin does not enable or disable Skyrim's global player-control flags.
+
 ## Mechanics
 
 The movement simulation runs at 20 Hz while rendering at the game's frame rate.
