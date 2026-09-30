@@ -93,12 +93,12 @@ void draw(const Snapshot& state) {
     if(state.debug){
         ImGui::SetNextWindowPos({22,24},ImGuiCond_Always);ImGui::SetNextWindowBgAlpha(.85f);
         ImGui::Begin("Voxel diagnostics",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoInputs|ImGuiWindowFlags_NoSavedSettings);
-        ImGui::Text("VoxelControls 0.1.2 / Skyrim 1.7.104 / %.1f FPS",ImGui::GetIO().Framerate);
+        ImGui::Text("VoxelControls 0.1.3 / Skyrim 1.7.104 / %.1f FPS",ImGui::GetIO().Framerate);
         ImGui::Text("%s / %s",state.enabled?"ENABLED":"VANILLA",modeName(state.mode));
         ImGui::Text("XYZ: %.2f / %.2f / %.2f (Skyrim units)",state.position.x,state.position.y,state.position.z);
         ImGui::Text("Velocity: %.2f / %.2f / %.2f m/s",state.velocity.x,state.velocity.y,state.velocity.z);
         ImGui::Text("Speed %.2f m/s   Camera %d   Controller %s",state.velocity.length(),state.camera,state.active?"active":"suspended");
-        if(state.controlState==ControlMode::Scripted)ImGui::Text("Skyrim owns control: scripted scene or restricted input");
+        if(!state.controlReason.empty())ImGui::Text("%s",state.controlReason.c_str());
         ImGui::Text("Cell: %s",state.location.c_str());
         ImGui::Text("Health %.0f   Magicka %.0f   Stamina %.0f",state.health,state.magicka,state.stamina);
         if(state.mode==Mode::Creative)ImGui::Text("Flight FOV x%.3f / no stamina cost",state.flightFov);
@@ -122,7 +122,7 @@ void draw(const Snapshot& state) {
         ImGui::SetNextWindowPos({22,display.y-48},ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(.7f);
         ImGui::Begin("Voxel ready",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoInputs|ImGuiWindowFlags_NoSavedSettings);
-        ImGui::TextColored({.7f,.89f,.52f,1},"VoxelControls 0.1.2  /  %s  /  F3 diagnostics",state.enabled?"READY":"VANILLA");ImGui::End();
+        ImGui::TextColored({.7f,.89f,.52f,1},"VoxelControls 0.1.3  /  %s  /  F3 diagnostics",state.enabled?"READY":"VANILLA");ImGui::End();
     }
     if(state.workbench)drawWorkbench(state);
 }

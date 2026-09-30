@@ -15,7 +15,7 @@ struct Snapshot {
     float health{},magicka{},stamina{},attackCharge=1;
     float flightFov=1;
     int camera{},selectedSpell{};
-    std::string location="Main menu",status="VoxelControls ready",target;
+    std::string location="Main menu",status="VoxelControls ready",target,controlReason;
     std::array<bool,3> spells{};
     std::vector<RecipeView> recipes;
 };

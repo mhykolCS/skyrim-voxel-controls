@@ -128,6 +128,23 @@ teleports were not applied to the user's saved character. The final installed
 build excludes the development command-file driver. All 43 existing save-directory
 files matched their pre-test hashes, and the tests created no additional saves.
 
+## 0.1.3 camera permission regression
+
+The user's playable HelgenKeep01 state had control mask `FFFFFFDF`: movement,
+looking and jumping were enabled, but perspective switching was disabled. The
+0.1.2 policy incorrectly treated that one camera permission as a global cutscene
+lock. Version 0.1.3 gates F5 on that permission while allowing movement and flight.
+Real movement, AI, animation, furniture and input restrictions still suspend the
+plugin. F3 and rejected F5/F6 actions now report the specific blocking condition.
+
+The preserved Helgen save loaded with `policy=4`, `pov=false`, `jumping=true`, and
+all other restrictions false. Double Space entered creative flight in the same
+room, raised the player to Z 516.91, and changed world FOV from 80 to 88. F5 was
+rejected with the camera-switching reason, and the control mask stayed `FFFFFFDF`.
+All three native test suites pass, including the new camera-only-lock regression.
+The profile and 47 original save-directory files were backed up before testing;
+a separate `VoxelControlsBefore013` save preserves the user's current position.
+
 ## Runtime setup and preservation
 
 The old Proton prefix contained a 2016 Microsoft C++ runtime that failed during

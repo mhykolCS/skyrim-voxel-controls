@@ -45,12 +45,13 @@ F10 restores those bindings. Ranged weapons and equipped native spells retain
 their native attack inputs. Alchemy stations and the magic menu open the new
 workbench while enabled; F10 gives access to the original menus.
 
-Version 0.1.1 automatically hands control back to Skyrim during cutscenes,
-scripted movement, character creation, and restricted camera or furniture states.
-Movement, flight, camera switching, custom combat, and the workbench wait until
-Skyrim releases control. F3 explains the suspension. Steve's visual replacement
-also steps aside for scripted animations and returns with ordinary gameplay.
-The plugin does not enable or disable Skyrim's global player-control flags.
+The mod automatically hands control back to Skyrim during cutscenes, scripted
+movement, character creation, camera animations, and furniture use. Steve's visual
+replacement also steps aside for scripted animations. Version 0.1.3 distinguishes
+a lock on camera switching from a movement lock: playable Helgen sections can use
+Minecraft movement and flight while F5 respects Skyrim's perspective restriction.
+F3 and rejected F6/F5 actions show the specific restriction. The plugin does not
+enable or disable Skyrim's global player-control flags.
 
 ## Mechanics
 

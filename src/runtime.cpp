@@ -370,10 +370,11 @@ void update() {
         if(command.action==Action::ToggleDebug){debug=!debug;continue;}
         if(command.action==Action::ToggleEnabled){enabled=!enabled;workbench=false;if(!enabled)restoreCamera();reserveKeys(enabled);notify(enabled?"Voxel controls enabled":"Vanilla controls restored");continue;}
         if(command.action==Action::CloseWorkbench){workbench=false;continue;}
-        if(!allowsAction(readControlContext(),command.action)) {
+        const auto actionContext=readControlContext();
+        if(!allowsAction(actionContext,command.action)) {
             if(debug)spdlog::info("Gameplay action {} suppressed by Skyrim context",int(command.action));
-            if(command.action==Action::Creative&&controlMode(readControlContext())==ControlMode::Scripted)
-                notify("Flight waits until Skyrim releases scripted controls");
+            if(command.action==Action::Creative||command.action==Action::Camera)
+                notify(std::string(command.action==Action::Creative?"Flight unavailable: ":"Camera unavailable: ")+actionBlockedReason(actionContext,command.action));
             continue;
         }
         switch(command.action) {
@@ -398,6 +399,9 @@ void update() {
         if(controlState!=ControlMode::Paused){restoreCamera();restoreFlightFov();requestWorkbench=false;}
     }
     else {
+        // A POV-only lock must release our camera adjustments without stopping
+        // permitted movement or changing Skyrim's chosen perspective.
+        if(!controlContext.pov)restoreCamera();
         if(requestWorkbench){workbench=true;requestWorkbench=false;}
         if(controller!=ownedController){
             releasePhysics(player,true);ownedController=controller;savedGravity=controller->gravity;
@@ -434,7 +438,15 @@ void update() {
     }
     updatePlayerModel(controlState==ControlMode::Gameplay||controlState==ControlMode::Paused,movement.state.mode,movement.state.velocity,paused?0:dt);
     static auto previousControlState=ControlMode::Unavailable;
-    if(previousControlState!=controlState){spdlog::info("Control context {} -> {}",int(previousControlState),int(controlState));previousControlState=controlState;}
+    if(previousControlState!=controlState){
+        spdlog::info("Control context {} -> {}: reason='{}' movement={} looking={} pov={} jumping={} handler={} inputBlocked={} povScript={} ai={} characterSetup={} scene={} actorRestricted={} furniture={} gameplayCamera={}",
+            int(previousControlState),int(controlState),actionBlockedReason(controlContext,Action::Creative),
+            controlContext.movement,controlContext.looking,controlContext.pov,controlContext.jumping,
+            controlContext.movementHandler,controlContext.inputBlocked,controlContext.scriptedPOV,
+            controlContext.aiDriven,controlContext.characterSetup,controlContext.scene,
+            controlContext.actorRestricted,controlContext.furniture,controlContext.gameplayCamera);
+        previousControlState=controlState;
+    }
     static auto lastTelemetry=Clock::now();
     if(debug&&world&&now-lastTelemetry>std::chrono::seconds(1)) {
         auto pos=player->GetPosition();RE::hkVector4 measured{};if(controller)controller->GetLinearVelocityImpl(measured);
@@ -455,6 +467,8 @@ void update() {
     Snapshot next;
     next.enabled=enabled;next.active=active;next.debug=debug;next.workbench=workbench;next.flightFov=float(flightFov.multiplier);
     next.controlState=controlState;
+    next.controlReason=actionBlockedReason(controlContext,Action::Creative);
+    if(active&&next.controlReason.empty()&&!controlContext.pov)next.controlReason="Camera switching locked; movement and flight available";
     next.mode=movement.state.mode;next.velocity=movement.state.velocity;next.camera=cameraMode;next.status=status;next.selectedSpell=selectedSpell;next.attackCharge=float(combat.charge());
     if(world) {
         auto pos=player->GetPosition();next.position={pos.x,pos.y,pos.z};
@@ -538,7 +552,7 @@ public:
 } menuSink;
 class ControlSink final:public RE::BSTEventSink<RE::UserEventEnabled> {
     RE::BSEventNotifyControl ProcessEvent(const RE::UserEventEnabled* event,RE::BSTEventSource<RE::UserEventEnabled>*) override {
-        if(event&&!event->newUserEventFlag.all(Flag::kMovement,Flag::kLooking,Flag::kPOVSwitch)) {
+        if(event&&!event->newUserEventFlag.all(Flag::kMovement,Flag::kLooking)) {
             suppressedNative=0;
             std::lock_guard lock(physicsMutex);physicsPlayer=nullptr;
         }
