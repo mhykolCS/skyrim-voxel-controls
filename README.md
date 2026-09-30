@@ -24,14 +24,14 @@ separate checks. See [validation](docs/VALIDATION.md) for the current evidence.
 
 | Input | Action |
 | --- | --- |
-| W A S D | Move; diagonals are normalized |
+| W A S D | Move with Java ground friction and air steering |
 | Space | Jump; ascend in creative flight |
 | Shift | Move slowly; descend in creative flight |
-| Ctrl | Sprint; faster creative flight; glide boost uses magicka |
+| Ctrl | Sprint; 2× horizontal creative flight with wider FOV; glide boost uses magicka |
 | F3 | Debug overlay: position, velocity, frame rate, controller state |
 | F5 | First person, rear third person, front third person |
 | F6 | Enter or leave creative flight |
-| Space twice | Toggle hovering while creative mode is armed |
+| Space twice | Enter or leave creative flight directly; no F6 arming needed |
 | F7 while airborne | Deploy or fold the glider |
 | F8 | Open or close the workbench |
 | F10 | Toggle the mod and restore vanilla movement/input |
@@ -55,10 +55,22 @@ The plugin does not enable or disable Skyrim's global player-control flags.
 ## Mechanics
 
 The movement simulation runs at 20 Hz while rendering at the game's frame rate.
-Walking is 4.317 m/s, sprinting 5.612 m/s, and the jump impulse is 8.4 m/s.
-Skyrim's Havok controller resolves collisions. Creative mode provides directional
-flight and hover. The independent glider model trades altitude for speed, permits
-pitch-driven climbing, and caps speed; Ctrl boost consumes 15 magicka/second.
+Version 0.1.2 targets Java Edition 1.21.1: a normal jump rises about 1.252 blocks,
+walking approaches 4.317 m/s, and sprinting 5.612 m/s. Gravity, drag, ground
+acceleration, air steering, held jumping, and sprint-jump momentum follow its
+20-tick movement model. Render frames integrate portions of ticks so low frame
+rates do not shorten the jump. Skyrim's Havok controller resolves collisions.
+
+Double-tap Space to fly; double-tap again to stop. Space ascends, Shift descends,
+and Ctrl doubles horizontal flight speed from about 10.89 to 21.78 m/s. Vertical
+flight approaches 7.5 m/s. Flight has Minecraft's smooth FOV increase, with an
+additional increase for Ctrl, and consumes **no stamina or magicka**. Touching
+down ends flight. F6 remains a direct alternative to double Space.
+
+The glider uses Java's dive, lift, steering and drag rules. Its Ctrl boost uses
+the firework acceleration rule with a Skyrim adaptation: 15 magicka/second.
+See [physics parameters and reference tests](docs/PHYSICS.md) for the exact target
+and the remaining engine differences.
 
 Melee uses a 1.6 attacks/second recharge with reduced damage for early attacks,
 falling criticals, sprint knockback, a three-metre reach check, and the game's

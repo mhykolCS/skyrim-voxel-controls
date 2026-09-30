@@ -6,13 +6,15 @@ NVIDIA RTX 3050 Ti. This is a playable development alpha, with the limits below.
 
 ## Automated and build checks
 
-- Native C++ core: CMake/Ninja build and CTest pass (two test executables with
+- Native C++ core: CMake/Ninja build and CTest pass (three test executables with
   multiple assertions). Checks include 30 versus 144 FPS integration, normalized
   diagonals, jump height and gravity, creative hover/ascent, bounded gliding,
   attack recharge/critical conditions, and recipe transaction preflight.
   Control-policy regressions reject every custom gameplay action during script,
   AI, character-creation, furniture, and camera restrictions; distinguish pause
   from a scene; and exercise a quest taking and releasing control mid-gameplay.
+  Version 0.1.2 also checks 900 independent Java movement reference ticks and
+  15/30/60/144 FPS jump displacement; see [physics target](PHYSICS.md).
 - Windows plugin: clang-cl Release cross-build with pinned CommonLibSSE-NG,
   ImGui, vcpkg dependencies and Microsoft SDK/CRT. The normal build explicitly
   sets `VOXEL_PLAYTEST=OFF`; the command-file driver is development-only.
@@ -91,6 +93,40 @@ Live checks on the same runtime confirmed:
   `Make your way to the Keep`, without quest-stage or control-enabling commands.
   Native walking remained available once the game released movement while
   other introduction restrictions were still in place.
+
+## 0.1.2 Java physics and creative flight
+
+The normal-ground physics model now agrees with 900 independently generated
+Java reference ticks. The target parameters, exact ordering, source provenance,
+and engine differences are recorded in [PHYSICS.md](PHYSICS.md). The original
+render adapter applied the last tick's velocity for a whole frame; it now
+integrates partial ticks before supplying Havok's velocity.
+
+Live checks with the game visible on DP-2 confirmed:
+
+- A single Space jump in QASmoke rose from Z 6976.3501 to 7063.7358: 87.3857
+  Skyrim units, or **1.2485 blocks** at the engine's 69.99125 units/block scale.
+  The Java model target is 1.2522 blocks; the observed difference is about 0.3%.
+- Double Space directly entered creative flight without using F6. Another
+  double tap exited to survival movement. F6 still entered flight independently.
+  Holding Shift to touch down also ended flight and restored the baseline FOV.
+- Outdoor ascent settled at 7.50 blocks/second. Horizontal flight approached
+  10.89 normally and **21.7769 with Ctrl**.
+- With the test character's stamina regeneration set to zero, stamina remained
+  exactly **50.0000** throughout the flight/boost trace; magicka stayed at 100.
+  Skyrim's native sprint state stayed false.
+- The existing world FOV was 80 degrees. Creative flight eased to 88 degrees,
+  Ctrl flight to 101.2, Ctrl release back to 88, and flight exit back to 80.
+  Game captures show the outdoor sprint-flight view and diagnostic readings.
+- A control lock during boosted flight restored gravity to 1 and world FOV to
+  80, rejected double Space and F6, and left the script's flags intact. Releasing
+  that lock resumed survival movement. Pausing/resuming preserved the flight
+  mode and altitude; F10 restored vanilla gravity, input, and FOV.
+
+These tests used an unsaved temporary character. Test-only actor values and
+teleports were not applied to the user's saved character. The final installed
+build excludes the development command-file driver. All 43 existing save-directory
+files matched their pre-test hashes, and the tests created no additional saves.
 
 ## Runtime setup and preservation
 

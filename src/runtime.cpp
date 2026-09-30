@@ -347,6 +347,11 @@ void playtest() {
         }
     } else if(op=="magic")RE::UIMessageQueue::GetSingleton()->AddMessage(RE::MagicMenu::MENU_NAME,RE::UI_MESSAGE_TYPE::kShow,nullptr);
     else if(op=="dismiss")RE::UIMessageQueue::GetSingleton()->AddMessage(RE::TutorialMenu::MENU_NAME,RE::UI_MESSAGE_TYPE::kHide,nullptr);
+    else if(op=="survivalNo") {
+        auto data=RE::MessageBoxMenu::GetCurrentMessageBoxData();
+        if(data&&std::string(data->bodyText.c_str()).find("Survival")!=std::string::npos&&
+           data->buttonText.size()==2&&std::string(data->buttonText[1].c_str())=="No")RE::MessageBoxMenu::SelectOption(1);
+    }
     else if(op=="capture")captureRequested=true;
 }
 #endif
@@ -367,6 +372,8 @@ void update() {
         if(command.action==Action::CloseWorkbench){workbench=false;continue;}
         if(!allowsAction(readControlContext(),command.action)) {
             if(debug)spdlog::info("Gameplay action {} suppressed by Skyrim context",int(command.action));
+            if(command.action==Action::Creative&&controlMode(readControlContext())==ControlMode::Scripted)
+                notify("Flight waits until Skyrim releases scripted controls");
             continue;
         }
         switch(command.action) {

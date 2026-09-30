@@ -24,9 +24,10 @@ jobs:
         run: cmake -S . -B build-ci -G Ninja -DVOXEL_BUILD_PLUGIN=OFF -DCMAKE_BUILD_TYPE=Debug
       - name: Build
         run: cmake --build build-ci --parallel 2
-      - name: Test movement, combat, and recipes
+      - name: Test Minecraft physics, controls, combat, and recipes
         run: ctest --test-dir build-ci --output-on-failure
       - name: Check tool syntax
         run: |
           python3 -m py_compile tools/*.py
           bash -n tools/build-windows.sh tools/launch-skyrim.sh
+          node --check tools/generate-physics-reference.cjs
