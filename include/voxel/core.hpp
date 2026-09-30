@@ -19,9 +19,12 @@ struct Vec3 {
 };
 enum class Mode { Survival, Creative, Glide };
 struct Settings {
-    double walkSpeed=4.317, sprintSpeed=5.612, sneakSpeed=1.295;
-    double jumpSpeed=8.4, gravity=32.0, terminalSpeed=78.4;
-    double flightSpeed=10.8, flightBoost=2.0, maxGlideSpeed=55.0;
+    // Java Edition, normal ground. Acceleration/impulses use blocks per tick.
+    double groundAcceleration=.1, groundDrag=.6*.91;
+    double airAcceleration=.02, airDrag=.91, verticalDrag=.98;
+    double jumpImpulse=.42, gravity=.08, sprintMultiplier=1.3, sneakMultiplier=.3;
+    double flightAcceleration=.05, flightVerticalAcceleration=.15;
+    double flightSprintMultiplier=2, flightVerticalDrag=.6;
 };
 struct Input {
     double forward{}, strafe{}, yaw{}, pitch{};
@@ -29,6 +32,7 @@ struct Input {
 };
 struct Motion {
     Vec3 velocity{};
+    Vec3 frameVelocity{};
     Mode mode=Mode::Survival;
     bool grounded{}, jumped{};
 };
@@ -43,9 +47,25 @@ public:
     void advance(double dt, const Input& input, bool grounded, Vec3 measuredVelocity);
 private:
     void tick(const Input& input, bool grounded);
-    double accumulator_{};
+    Vec3 momentum_{}; // blocks/tick, after drag; distinct from the move this tick
+    double tickRemaining_{};
+    int jumpCooldown_{};
+    bool flightAirborne_{};
     bool jumpWasDown_{};
     bool jumpQueued_{};
+};
+// Minecraft's camera modifier blends halfway to its target every game tick.
+class FlightFov {
+public:
+    double multiplier=1;
+    double advance(double dt,bool flying,bool sprinting) {
+        if(std::isfinite(dt)&&dt>0) {
+            const double target=flying?(sprinting?1.1*1.15:1.1):1;
+            multiplier=target+(multiplier-target)*std::pow(.5,dt/.05);
+        }
+        return multiplier;
+    }
+    void reset(){multiplier=1;}
 };
 struct Strike {
     double damage{}, charge{}, knockback{};

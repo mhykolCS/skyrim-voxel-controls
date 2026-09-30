@@ -4,13 +4,14 @@
 namespace voxel {
 void Movement::reset(Vec3 velocity) {
     state={}; state.velocity=velocity.finite()?velocity:Vec3{};
-    accumulator_=0; jumpWasDown_=false; jumpQueued_=false;
+    momentum_=state.velocity*.05;tickRemaining_=0;jumpCooldown_=0;
+    flightAirborne_=false;jumpWasDown_=false;jumpQueued_=false;
 }
 void Movement::setMode(Mode mode) {
     if(state.mode==mode) return;
     state.mode=mode;
-    if(mode==Mode::Creative) state.velocity.z=0;
-    if(mode==Mode::Glide && state.velocity.horizontal()<4) state.velocity.y=4;
+    tickRemaining_=0;jumpQueued_=false;flightAirborne_=false;
+    if(mode==Mode::Creative){state.velocity.z=0;momentum_.z=0;}
 }
 void Movement::advance(double dt,const Input& input,bool grounded,Vec3 measuredVelocity) {
     if(!std::isfinite(dt)||dt<=0) return;
@@ -19,73 +20,87 @@ void Movement::advance(double dt,const Input& input,bool grounded,Vec3 measuredV
     state.grounded=grounded;
     if(input.jump&&!jumpWasDown_) jumpQueued_=true;
     jumpWasDown_=input.jump;
-    // Ceiling contacts must cancel upward momentum. Floor contacts clear falling.
-    if(measuredVelocity.finite() && state.mode!=Mode::Creative) {
-        if(state.velocity.z>0.5&&measuredVelocity.z<0.05&&!grounded) state.velocity.z=0;
-        if(grounded&&state.velocity.z<0) state.velocity.z=0;
+    if(state.mode==Mode::Creative) {
+        if(!grounded)flightAirborne_=true;
+        else if(flightAirborne_){setMode(Mode::Survival);momentum_.z=0;state.velocity.z=0;}
     }
-    accumulator_+=std::min(dt,0.2);
-    while(accumulator_>=0.05-1e-9) {
-        tick(input,grounded);
-        accumulator_-=0.05;
-        if(state.jumped) grounded=false;
+    // Havok remains responsible for collisions. Do not push through a ceiling
+    // or retain downward momentum after contact with the floor.
+    if(measuredVelocity.finite()) {
+        if((state.velocity.z>.5&&measuredVelocity.z<.05&&!grounded)||
+           (grounded&&state.velocity.z<0)){state.velocity.z=0;momentum_.z=0;}
     }
+    // Integrate portions of Minecraft ticks, rather than applying the final
+    // tick's velocity across the entire render frame. This preserves the jump
+    // displacement even when a render frame straddles two or more 50 ms ticks.
+    const double duration=std::min(dt,.2);double remaining=duration;Vec3 displacement;
+    while(remaining>1e-9) {
+        if(tickRemaining_<1e-9){tick(input,grounded);tickRemaining_=.05;}
+        if(state.jumped)grounded=false;
+        const double slice=std::min(remaining,tickRemaining_);
+        displacement=displacement+state.velocity*slice;
+        remaining-=slice;tickRemaining_-=slice;
+    }
+    state.frameVelocity=displacement*(1.0/duration);
     if(!state.velocity.finite()) reset();
 }
 void Movement::tick(const Input& input,bool grounded) {
-    auto& v=state.velocity;
-    double f=std::clamp(input.forward,-1.0,1.0),s=std::clamp(input.strafe,-1.0,1.0);
+    auto v=momentum_;
+    const bool flying=state.mode==Mode::Creative;
+    if(flying)v.z+=(double(input.jump)-double(input.descend))*settings.flightVerticalAcceleration;
+    for(auto component:{&v.x,&v.y,&v.z})if(std::abs(*component)<.003)*component=0;
+    const bool sprint=input.sprint&&(flying||(!input.descend&&input.forward>.8));
+    if(jumpCooldown_>0)--jumpCooldown_;
+    double f=std::clamp(input.forward,-1.0,1.0)*.98,s=std::clamp(input.strafe,-1.0,1.0)*.98;
+    if(input.descend&&!flying){f*=settings.sneakMultiplier;s*=settings.sneakMultiplier;}
     double n=std::hypot(f,s); if(n>1) {f/=n;s/=n;}
     const double sy=std::sin(input.yaw),cy=std::cos(input.yaw);
     const Vec3 wish{sy*f+cy*s,cy*f-sy*s,0};
-    if(state.mode==Mode::Creative) {
-        double speed=settings.flightSpeed*(input.sprint?settings.flightBoost:1);
-        Vec3 target=wish*speed;
-        target.z=(double(input.jump)-double(input.descend))*speed;
-        if(target.length()>speed) target=target*(speed/target.length());
-        v=v*0.35+target*0.65;
-        jumpQueued_=false;
-        return;
-    }
     if(state.mode==Mode::Glide) {
         if(grounded) {state.mode=Mode::Survival;v.z=0;}
         else {
-            // Independent glider model: diving trades height for horizontal speed;
-            // pitching up converts horizontal momentum into lift, with drag.
-            const double pitch=std::clamp(input.pitch,-1.45,1.45);
+            const double pitch=std::clamp(input.pitch,-1.57079632679,1.57079632679);
+            const double cp=std::cos(pitch),sp=std::sin(pitch);
+            // A held boost uses the Java firework acceleration rule. The
+            // Skyrim adapter supplies its resource cost separately.
+            if(input.boost) {
+                Vec3 look{sy*cp,cy*cp,-sp};
+                v=v+(look*1.5-v)*.5+look*.1;
+            }
             const double horizontal=v.horizontal();
-            const double lift=std::cos(pitch)*std::cos(pitch);
-            v.z+=(-9.8+lift*7.2)*0.05;
-            if(v.z<0) {
-                double transfer=-v.z*0.08*lift;
+            const double lift=cp*cp;
+            v.z+=settings.gravity*(-1+lift*.75);
+            if(v.z<0&&cp>1e-9) {
+                double transfer=-v.z*.1*lift;
                 v.z+=transfer;v.x+=sy*transfer;v.y+=cy*transfer;
             }
-            if(pitch<0) {
-                double climb=horizontal*(-std::sin(pitch))*0.035;
-                v.z+=climb*2.4;v.x-=sy*climb;v.y-=cy*climb;
+            if(pitch<0&&cp>1e-9) {
+                double climb=horizontal*(-sp)*.04;
+                v.z+=climb*3.2;v.x-=sy*climb;v.y-=cy*climb;
             }
-            v.x+=(sy*horizontal-v.x)*0.12;
-            v.y+=(cy*horizontal-v.y)*0.12;
-            if(input.boost) {
-                v.x+=sy*std::cos(pitch)*0.9;
-                v.y+=cy*std::cos(pitch)*0.9;
-                v.z-=std::sin(pitch)*0.9;
+            if(cp>1e-9) {
+                v.x+=(sy*horizontal-v.x)*.1;
+                v.y+=(cy*horizontal-v.y)*.1;
             }
             v.x*=0.99;v.y*=0.99;v.z*=0.98;
-            if(v.length()>settings.maxGlideSpeed) v=v*(settings.maxGlideSpeed/v.length());
+            state.velocity=v*20;momentum_=v;
             jumpQueued_=false;
             return;
         }
     }
-    const double speed=input.descend?settings.sneakSpeed:(input.sprint?settings.sprintSpeed:settings.walkSpeed);
-    const double response=grounded?0.72:0.12;
-    v.x+=(wish.x*speed-v.x)*response;
-    v.y+=(wish.y*speed-v.y)*response;
-    if(grounded&&jumpQueued_) {
-        v.z=settings.jumpSpeed;state.jumped=true;state.grounded=false;
-        if(input.sprint) {v.x+=sy*1.3;v.y+=cy*1.3;}
-    } else if(grounded) v.z=-0.15;
-    else v.z=std::max(-settings.terminalSpeed,(v.z-settings.gravity*0.05)*0.98);
+    if(!flying&&(input.jump||jumpQueued_)) {
+        if(grounded&&jumpCooldown_==0){
+            v.z=settings.jumpImpulse;state.jumped=true;state.grounded=false;jumpCooldown_=10;
+            if(sprint){v.x+=sy*.2;v.y+=cy*.2;}
+        }
+    } else jumpCooldown_=0;
+    const double drag=flying?settings.airDrag:(grounded?settings.groundDrag:settings.airDrag);
+    const double acceleration=flying?settings.flightAcceleration*(sprint?settings.flightSprintMultiplier:1):
+        (grounded?settings.groundAcceleration:settings.airAcceleration)*(sprint?settings.sprintMultiplier:1);
+    v.x+=wish.x*acceleration;v.y+=wish.y*acceleration;
+    // Move first, then gravity/drag. Reversing this order shortens the jump.
+    state.velocity=v*20;
+    momentum_={v.x*drag,v.y*drag,flying?v.z*settings.flightVerticalDrag:(v.z-settings.gravity)*settings.verticalDrag};
     jumpQueued_=false;
 }
 Strike Combat::strike(double baseDamage,bool falling,bool sprinting) {

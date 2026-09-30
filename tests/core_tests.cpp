@@ -16,10 +16,15 @@ int main() {
     check((a.velocity-b.velocity).length()<1e-7,"walking independent of render FPS");
     Input diagonal=walk;diagonal.strafe=1;
     auto d=simulate(60,diagonal,Mode::Survival,true);
-    check(std::abs(d.velocity.horizontal()-a.velocity.horizontal())<1e-7,"no diagonal speed advantage");
+    check(std::abs(d.velocity.horizontal()/a.velocity.horizontal()-1/.98)<1e-7,"Java 1.21.1 diagonal input normalization");
+    check(std::abs(a.velocity.horizontal()-4.31718061674)<1e-5,"Java normal-block walking speed");
     Input fly;fly.jump=true;
     auto f=simulate(60,fly,Mode::Creative,false);
-    check(f.velocity.z>10.7&&f.velocity.z<10.9,"creative ascends at configured speed");
+    check(std::abs(f.velocity.z-7.5)<1e-7,"creative ascends at Java vertical speed");
+    auto cruise=simulate(60,walk,Mode::Creative,false);
+    Input fast=walk;fast.sprint=true;auto sprintFlight=simulate(60,fast,Mode::Creative,false);
+    check(std::abs(cruise.velocity.horizontal()-10.8888888889)<.05,"creative horizontal flight speed");
+    check(std::abs(sprintFlight.velocity.horizontal()/cruise.velocity.horizontal()-2)<1e-7,"Ctrl doubles horizontal flight speed");
     auto hover=simulate(60,{},Mode::Creative,false);
     check(hover.velocity.length()==0,"creative hover has no gravity");
     Movement jump;Input j;j.jump=true;jump.advance(0.05,j,true,{});
@@ -32,6 +37,19 @@ int main() {
     Movement glide;glide.setMode(Mode::Glide);Input boost;boost.boost=true;
     for(int i=0;i<20000;++i){boost.pitch=std::sin(i*.01);glide.advance(.05,boost,false,glide.state.velocity);check(glide.state.velocity.finite()&&glide.state.velocity.length()<=55.00001,"gliding remains finite and bounded");}
     glide.advance(.05,{},true,{});check(glide.state.mode==Mode::Survival,"glider lands into survival mode");
+    for(int fps:{15,30,60,144}) {
+        Movement arc;double displacement=0;
+        for(int frame=0;frame<fps;++frame){Input press;press.jump=frame==0;arc.advance(1.0/fps,press,frame==0,arc.state.velocity);displacement+=arc.state.frameVelocity.z/fps;}
+        // Exact Java displacement after twenty airborne ticks, including the
+        // initial 0.42-block jump. A render boundary must not shorten the arc.
+        check(std::abs(displacement-(-6.2709298708555))<1e-5,"jump displacement invariant from 15 to 144 FPS");
+    }
+    Movement landed;landed.setMode(Mode::Creative);landed.advance(.05,{},false,{});landed.advance(.05,{},true,{});
+    check(landed.state.mode==Mode::Survival,"touching down ends creative flight");
+    FlightFov fov;for(int i=0;i<60;++i)fov.advance(1./60,true,true);
+    check(std::abs(fov.multiplier-1.265)<1e-5,"sprint-flight FOV matches Java modifier");
+    for(int i=0;i<60;++i)fov.advance(1./60,false,false);
+    check(std::abs(fov.multiplier-1)<1e-5,"flight FOV returns to baseline");
     Combat c;auto full=c.strike(10,false,false);auto spam=c.strike(10,false,false);
     check(full.damage==10&&spam.damage==2,"attack cooldown limits spam");
     c.advance(1);check(c.strike(10,true,false).damage==15,"charged falling critical");

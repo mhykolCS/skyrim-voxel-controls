@@ -17,7 +17,7 @@ ControlContext gameplay() {
 
 void expectSuspended(const ControlContext& c) {
     constexpr std::array actions{Action::Camera,Action::Creative,Action::Glide,
-        Action::ToggleHover,Action::Workbench,Action::Craft,Action::SelectSpell,
+        Action::Workbench,Action::Craft,Action::SelectSpell,
         Action::Attack,Action::Cast};
     check(controlMode(c)!=ControlMode::Gameplay,"scripted state cannot drive physics");
     for(auto action:actions)check(!allowsAction(c,action),"scripted state rejects every gameplay shortcut");
@@ -47,8 +47,7 @@ int main() {
     c=free;c.enabled=false;expectSuspended(c);
     c=free;c.world=false;expectSuspended(c);
     c=free;c.jumping=false;
-    check(!allowsAction(c,Action::Creative)&&!allowsAction(c,Action::Glide)&&
-          !allowsAction(c,Action::ToggleHover),"flight cannot bypass a jump restriction");
+    check(!allowsAction(c,Action::Creative)&&!allowsAction(c,Action::Glide),"flight cannot bypass a jump restriction");
     c=free;c.fighting=false;
     check(!allowsAction(c,Action::Attack)&&!allowsAction(c,Action::Cast),"custom combat honors fighting restriction");
     c=free;c.activate=false;
@@ -58,5 +57,12 @@ int main() {
     c.movement=false;expectSuspended(c);
     c.movement=true;c.aiDriven=true;expectSuspended(c);
     c.aiDriven=false;check(allowsAction(c,Action::Camera),"resume only after all scene restrictions end");
+    FlightDoubleTap tap;
+    check(!tap.press(0,true)&&tap.press(.2,true),"double Space enters flight without arming it first");
+    check(!tap.press(.3,true),"a third tap cannot reuse the previous pair");
+    check(!tap.press(.8,true),"slow taps are normal jumps");
+    check(tap.press(1.1,true),"seven-tick flight window includes 300 ms");
+    check(!tap.press(2,true)&&!tap.press(2.1,false)&&!tap.press(2.2,true),"scene clears pending first tap");
+    tap.reset();check(!tap.press(2.3,true),"pause/load reset prevents a stale toggle");
     std::cout<<"Control policy regressions passed\n";
 }

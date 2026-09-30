@@ -101,6 +101,7 @@ void draw(const Snapshot& state) {
         if(state.controlState==ControlMode::Scripted)ImGui::Text("Skyrim owns control: scripted scene or restricted input");
         ImGui::Text("Cell: %s",state.location.c_str());
         ImGui::Text("Health %.0f   Magicka %.0f   Stamina %.0f",state.health,state.magicka,state.stamina);
+        if(state.mode==Mode::Creative)ImGui::Text("Flight FOV x%.3f / no stamina cost",state.flightFov);
         if(!state.target.empty())ImGui::Text("Target: %s",state.target.c_str());
         ImGui::TextUnformatted(state.status.c_str());
         ImGui::End();
@@ -111,6 +112,7 @@ void draw(const Snapshot& state) {
         ImGui::Begin("Voxel hotbar",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoInputs|ImGuiWindowFlags_NoSavedSettings);
         ImGui::TextColored({.7f,.89f,.52f,1},"%s",modeName(state.mode));
         ImGui::SameLine();ImGui::TextDisabled("F8 workbench");
+        ImGui::TextDisabled(state.mode==Mode::Creative?"Space up / Shift down / Ctrl faster / double Space to stop":"Double Space: creative flight / F7: glide");
         const char* names[]{"1 FIRE","2 FROST","3 STORM"};
         for(int i=0;i<3;++i){if(i)ImGui::SameLine();ImGui::TextColored(i==state.selectedSpell?ImVec4(.7f,.9f,.5f,1):ImVec4(.6f,.65f,.65f,1),"[%s %s]",names[i],state.spells[i]?"+":"-");}
         ImGui::ProgressBar(state.attackCharge,{320,5},"");

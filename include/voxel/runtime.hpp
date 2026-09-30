@@ -8,11 +8,12 @@
 namespace voxel {
 struct RecipeView { bool available{},learned{}; std::vector<int> counts; };
 struct Snapshot {
-    bool enabled=true, active{}, debug{}, workbench{}, creativeArmed{}, melee=true;
+    bool enabled=true, active{}, debug{}, workbench{}, melee=true;
     Mode mode=Mode::Survival;
     ControlMode controlState=ControlMode::Unavailable;
     Vec3 position{},velocity{};
     float health{},magicka{},stamina{},attackCharge=1;
+    float flightFov=1;
     int camera{},selectedSpell{};
     std::string location="Main menu",status="VoxelControls ready",target;
     std::array<bool,3> spells{};

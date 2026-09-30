@@ -13,6 +13,9 @@ std::atomic<bool> captureRequested=false;
 #endif
 namespace {
 using Clock=std::chrono::steady_clock;
+#ifdef VOXEL_PLAYTEST
+Clock::time_point traceUntil{};
+#endif
 using Flag=RE::UserEvents::USER_EVENT_FLAG;
 std::mutex sharedMutex;
 Snapshot snapshot;
@@ -22,11 +25,15 @@ std::array<bool,256> keys{};
 std::atomic<bool> frameQueued=false;
 Movement movement;
 Combat combat;
-Clock::time_point lastFrame=Clock::now(),lastJump{},lastCast{};
+Clock::time_point lastFrame=Clock::now(),lastCast{};
+FlightDoubleTap flightTap;
+FlightFov flightFov;
+bool fovOwned=false;
+float savedWorldFov{};
 RE::bhkCharacterController* ownedController{};
 float savedGravity{};
 std::atomic<std::uint32_t> suppressedNative{};
-bool enabled=true,debug=false,workbench=false,creativeArmed=false;
+bool enabled=true,debug=false,workbench=false;
 bool requestWorkbench=false;
 int cameraMode=0,selectedSpell=0;
 bool cameraOwned=false;
@@ -134,11 +141,10 @@ Vec3 unpack(const RE::hkVector4& vector) {
 RE::hkVector4 pack(Vec3 v) {return {float(v.x),float(v.y),float(v.z),0};}
 void notify(std::string text) {status=std::move(text);RE::SendHUDMessage::ShowHUDMessage(status.c_str());spdlog::info("{}",status);}
 void releasePhysics(RE::PlayerCharacter* player,bool preserveMode=false) {
-    const auto mode=movement.state.mode;const auto velocity=movement.state.velocity;
     {std::lock_guard lock(physicsMutex);physicsPlayer=nullptr;}
     if(ownedController&&player&&player->GetCharController()==ownedController) ownedController->gravity=savedGravity;
-    ownedController=nullptr;suppressedNative=0;movement.reset();
-    if(preserveMode){movement.setMode(mode);movement.state.velocity=velocity;}
+    ownedController=nullptr;suppressedNative=0;
+    if(!preserveMode)movement.reset();
 }
 void reserveKeys(bool reserve) {
     auto map=RE::ControlMap::GetSingleton();
@@ -182,6 +188,18 @@ void restoreCamera() {
     }
     cameraOwned=false;
     if(cameraMode==2)cameraMode=1;
+}
+void restoreFlightFov() {
+    if(fovOwned)if(auto camera=RE::PlayerCamera::GetSingleton())camera->GetRuntimeData2().worldFOV=savedWorldFov;
+    fovOwned=false;flightFov.reset();
+}
+void updateFlightFov(double dt,bool flying,bool sprinting) {
+    auto camera=RE::PlayerCamera::GetSingleton();if(!camera)return;
+    if(!fovOwned&&!flying)return;
+    if(!fovOwned){savedWorldFov=camera->GetRuntimeData2().worldFOV;fovOwned=true;}
+    const double multiplier=flightFov.advance(dt,flying,sprinting);
+    camera->GetRuntimeData2().worldFOV=float(std::clamp(savedWorldFov*multiplier,30.0,150.0));
+    if(!flying&&std::abs(multiplier-1)<.001)restoreFlightFov();
 }
 Inventory inventoryOf(RE::PlayerCharacter* player) {
     Inventory inv;
@@ -263,11 +281,17 @@ void playtestButton(unsigned key,float value,float held) {
 }
 void playtest() {
     static auto lastPoll=Clock::now();static unsigned heldKey=0;static auto releaseKey=Clock::now();
-    static unsigned nativeKey=0;static auto nativeStart=Clock::now(),nativeEnd=Clock::now();
-    if(nativeKey){
-        const float held=std::max(.001f,std::chrono::duration<float>(Clock::now()-nativeStart).count());
-        const bool released=Clock::now()>=nativeEnd;
-        playtestButton(nativeKey,released?0.f:1.f,held);if(released)nativeKey=0;
+    static std::array<bool,256> nativeKeys{};
+    static std::array<Clock::time_point,256> nativeStart{},nativeEnd{};
+    static int tapPhase=4;static auto tapStart=Clock::now();
+    constexpr double tapTimes[]{0,.05,.20,.25};
+    while(tapPhase<4&&std::chrono::duration<double>(Clock::now()-tapStart).count()>=tapTimes[tapPhase]) {
+        playtestButton(0x39,tapPhase%2?0.f:1.f,tapPhase%2?.05f:0.f);++tapPhase;
+    }
+    for(unsigned key=1;key<nativeKeys.size();++key)if(nativeKeys[key]){
+        const float held=std::max(.001f,std::chrono::duration<float>(Clock::now()-nativeStart[key]).count());
+        const bool released=Clock::now()>=nativeEnd[key];
+        playtestButton(key,released?0.f:1.f,held);if(released)nativeKeys[key]=false;
     }
     if(heldKey&&Clock::now()>=releaseKey){keys[heldKey]=false;heldKey=0;}
     if(Clock::now()-lastPoll<std::chrono::milliseconds(200))return;
@@ -290,11 +314,16 @@ void playtest() {
     } else if(op=="input") {
         unsigned key{};double duration{};input>>std::hex>>key>>std::dec>>duration;
         if(key>0&&key<keys.size()&&duration>0&&duration<=10){
-            if(nativeKey)playtestButton(nativeKey,0.f,.01f);
-            nativeKey=key;nativeStart=Clock::now();nativeEnd=nativeStart+std::chrono::milliseconds(int(duration*1000));
+            if(nativeKeys[key])playtestButton(key,0.f,.01f);
+            nativeKeys[key]=true;nativeStart[key]=Clock::now();nativeEnd[key]=nativeStart[key]+std::chrono::milliseconds(int(duration*1000));
             playtestButton(key,1.f,0.f);
         }
-    } else if(op=="ai"&&player){bool value{};input>>value;player->SetAIDriven(value);}
+    } else if(op=="release") {
+        for(unsigned key=1;key<nativeKeys.size();++key)if(nativeKeys[key]){playtestButton(key,0.f,.01f);nativeKeys[key]=false;}
+        tapPhase=4;
+    } else if(op=="doubletap"){tapPhase=0;tapStart=Clock::now();}
+    else if(op=="trace"){int seconds=5;input>>seconds;traceUntil=Clock::now()+std::chrono::seconds(std::clamp(seconds,1,30));}
+    else if(op=="ai"&&player){bool value{};input>>value;player->SetAIDriven(value);}
     else if(op=="hold") {unsigned key;double duration;input>>std::hex>>key>>std::dec>>duration;if(key>0&&key<keys.size()&&duration>0&&duration<=10){heldKey=key;keys[key]=true;releaseKey=Clock::now()+std::chrono::milliseconds(int(duration*1000));}}
     else if(op=="spawn"&&player&&player->GetParentCell()) {
         if(auto base=RE::TESForm::LookupByID<RE::TESBoundObject>(0x1BCD8)) {
@@ -309,6 +338,7 @@ void playtest() {
         const auto context=readControlContext();auto camera=RE::PlayerCamera::GetSingleton();
         spdlog::info("PLAYTEST paused={} crafting={} tutorial={} occupied={} controls={:X} stored={:X} suppressed={:X} pendingWorkbench={} policy={} ai={} characterSetup={} scene={} inputBlocked={} povScript={} camera={} filtered={}",ui->GameIsPaused(),ui->IsMenuOpen(RE::CraftingMenu::MENU_NAME),ui->IsMenuOpen(RE::TutorialMenu::MENU_NAME),bool(player&&player->GetOccupiedFurniture()),current,stored,suppressedNative.load(),requestWorkbench,int(controlMode(context)),context.aiDriven,context.characterSetup,context.scene,context.inputBlocked,context.scriptedPOV,camera&&camera->currentState?int(camera->currentState->id):-1,filteredInputs.load());
         if(player){auto pos=player->GetPosition();auto cc=player->GetCharController();spdlog::info("PLAYTEST xyz=({:.2f},{:.2f},{:.2f}) gravity={} physicsCalls={}",pos.x,pos.y,pos.z,cc?cc->gravity:-1.f,physicsCalls.load());}
+        if(player&&camera)spdlog::info("PLAYTEST mode={} stamina={:.4f} magicka={:.4f} worldFov={:.4f} fovFactor={:.4f} sprinting={} unitsPerBlock={:.5f}",int(movement.state.mode),player->AsActorValueOwner()->GetActorValue(RE::ActorValue::kStamina),player->AsActorValueOwner()->GetActorValue(RE::ActorValue::kMagicka),camera->GetRuntimeData2().worldFOV,flightFov.multiplier,player->AsActorState()->IsSprinting(),RE::bhkWorld::GetWorldScaleInverse());
     } else if(op=="alchemy"&&player) {
         if(auto base=RE::TESForm::LookupByID<RE::TESBoundObject>(0xBAD0C))if(auto ref=player->PlaceObjectAtMe(base,false)) {
             auto pos=player->GetPosition();auto yaw=player->GetAngleZ();
@@ -341,9 +371,10 @@ void update() {
         }
         switch(command.action) {
             case Action::Camera:setCamera((cameraMode+1)%3);break;
-            case Action::Creative:creativeArmed=!creativeArmed;movement.setMode(creativeArmed?Mode::Creative:Mode::Survival);notify(creativeArmed?"Creative flight: Space up, Shift down":"Survival movement");break;
-            case Action::Glide:if(!movement.state.grounded){creativeArmed=false;movement.setMode(movement.state.mode==Mode::Glide?Mode::Survival:Mode::Glide);notify(movement.state.mode==Mode::Glide?"Gliding: steer with mouse, hold Ctrl to boost":"Glider folded");}break;
-            case Action::ToggleHover:if(creativeArmed)movement.setMode(movement.state.mode==Mode::Creative?Mode::Survival:Mode::Creative);break;
+            case Action::Creative:
+                if(!workbench){movement.setMode(movement.state.mode==Mode::Creative?Mode::Survival:Mode::Creative);flightTap.reset();
+                    notify(movement.state.mode==Mode::Creative?"Creative flight: Space up, Shift down, Ctrl faster. Double Space to land.":"Flight off: Minecraft gravity restored");}break;
+            case Action::Glide:if(!movement.state.grounded){movement.setMode(movement.state.mode==Mode::Glide?Mode::Survival:Mode::Glide);notify(movement.state.mode==Mode::Glide?"Gliding: steer with mouse, hold Ctrl to boost":"Glider folded");}break;
             case Action::Workbench:workbench=!workbench;break;
             case Action::Craft:if(workbench)craft(player,command.value);break;
             case Action::SelectSpell:selectedSpell=std::clamp(command.value,0,2);break;
@@ -356,8 +387,8 @@ void update() {
     const auto controlContext=readControlContext();const auto controlState=controlMode(controlContext);
     bool active=controlState==ControlMode::Gameplay&&controller;
     if(!active) {
-        releasePhysics(player,controlState==ControlMode::Paused);workbench=false;keys.fill(false);
-        if(controlState!=ControlMode::Paused){restoreCamera();creativeArmed=false;requestWorkbench=false;lastJump={};}
+        releasePhysics(player,controlState==ControlMode::Paused);workbench=false;keys.fill(false);flightTap.reset();
+        if(controlState!=ControlMode::Paused){restoreCamera();restoreFlightFov();requestWorkbench=false;}
     }
     else {
         if(requestWorkbench){workbench=true;requestWorkbench=false;}
@@ -377,6 +408,7 @@ void update() {
         input.yaw=player->GetAngleZ();input.pitch=player->GetAngleX();
         input.jump=controlContext.jumping&&keys[0x39];input.descend=controlContext.sneaking&&(keys[0x2A]||keys[0x36]);input.sprint=keys[0x1D]||keys[0x9D];input.boost=input.sprint;
         if(workbench)input={};
+        if(!controlContext.jumping&&movement.state.mode!=Mode::Survival)movement.setMode(Mode::Survival);
         if(input.boost&&movement.state.mode==Mode::Glide) {
             auto values=player->AsActorValueOwner();float cost=float(std::min(dt,.2)*15);
             if(values->GetActorValue(RE::ActorValue::kMagicka)>=cost)values->DamageActorValue(RE::ActorValue::kMagicka,cost);
@@ -385,8 +417,9 @@ void update() {
         controller->gravity=0;
         movement.advance(dt,input,grounded,unpack(engineVelocity));
         if(movement.state.jumped){controller->wantState=RE::hkpCharacterStateType::kInAir;controller->flags.reset(RE::CHARACTER_FLAGS::kSupport);}
-        {std::lock_guard lock(physicsMutex);physicsPlayer=controller;desiredVelocity=pack(movement.state.velocity);}
-        controller->SetLinearVelocityImpl(pack(movement.state.velocity));
+        {std::lock_guard lock(physicsMutex);physicsPlayer=controller;desiredVelocity=pack(movement.state.frameVelocity);}
+        controller->SetLinearVelocityImpl(pack(movement.state.frameVelocity));
+        updateFlightFov(dt,movement.state.mode==Mode::Creative,input.sprint);
         // Fall damage is disabled only while flying; survival keeps vanilla damage.
         if(movement.state.mode!=Mode::Survival){RE::hkVector4 position;controller->GetPositionImpl(position,false);controller->fallTime=0;controller->fallStartHeight=float(unpack(position).z);}
         if(cameraMode==2)if(auto third=thirdPerson()){third->freeRotationEnabled=true;third->freeRotation={float(std::numbers::pi),0};}
@@ -413,12 +446,15 @@ void update() {
         lastTelemetry=now;
     }
     Snapshot next;
-    next.enabled=enabled;next.active=active;next.debug=debug;next.workbench=workbench;next.creativeArmed=creativeArmed;
+    next.enabled=enabled;next.active=active;next.debug=debug;next.workbench=workbench;next.flightFov=float(flightFov.multiplier);
     next.controlState=controlState;
     next.mode=movement.state.mode;next.velocity=movement.state.velocity;next.camera=cameraMode;next.status=status;next.selectedSpell=selectedSpell;next.attackCharge=float(combat.charge());
     if(world) {
         auto pos=player->GetPosition();next.position={pos.x,pos.y,pos.z};
         auto values=player->AsActorValueOwner();next.health=values->GetActorValue(RE::ActorValue::kHealth);next.magicka=values->GetActorValue(RE::ActorValue::kMagicka);next.stamina=values->GetActorValue(RE::ActorValue::kStamina);
+#ifdef VOXEL_PLAYTEST
+        if(now<traceUntil)spdlog::info("TRACE dt={:.6f} xyz={:.4f},{:.4f},{:.4f} velocity={:.5f},{:.5f},{:.5f} frameZ={:.5f} mode={} ground={} havokDt={:.6f} stamina={:.4f} fov={:.4f}",dt,pos.x,pos.y,pos.z,movement.state.velocity.x,movement.state.velocity.y,movement.state.velocity.z,movement.state.frameVelocity.z,int(movement.state.mode),movement.state.grounded,controller?controller->stepInfo.deltaTime:0,next.stamina,RE::PlayerCamera::GetSingleton()->GetRuntimeData2().worldFOV);
+#endif
         next.location=player->GetParentCell()->GetName();next.melee=meleeWeapon(player);
         if(auto pick=RE::CrosshairPickData::GetSingleton())if(auto target=pick->targetActor.get())next.target=target->GetName();
         for(int i=0;i<3;++i)if(auto spell=spellAt(i))next.spells[i]=player->HasSpell(spell);
@@ -457,11 +493,9 @@ public:
                     case 0x01:enqueue(Action::CloseWorkbench);break;
                     case 2:case 3:case 4:enqueue(Action::SelectSpell,int(key)-2);break;
                     case 0x39:
-                        if(creativeArmed) {
-                            auto now=Clock::now();
-                            if(now-lastJump<std::chrono::milliseconds(280))enqueue(Action::ToggleHover);
-                            lastJump=now;
-                        }break;
+                        if(flightTap.press(std::chrono::duration<double>(Clock::now().time_since_epoch()).count(),
+                            !workbench&&allowsAction(readControlContext(),Action::Creative)))enqueue(Action::Creative);
+                        break;
                     default:break;
                 }
             } else if(button->device==RE::INPUT_DEVICE::kMouse) {
@@ -509,7 +543,7 @@ Snapshot readSnapshot(){std::lock_guard lock(sharedMutex);return snapshot;}
 void enqueue(Action action,int value){std::lock_guard lock(sharedMutex);commands.push_back({action,value});}
 PointerInput takePointerInput(){std::lock_guard lock(sharedMutex);auto result=pointer;pointer.dx=pointer.dy=pointer.wheel=0;return result;}
 void queueFrame(){if(!frameQueued.exchange(true))SKSE::GetTaskInterface()->AddTask(update);}
-void resetRuntime(){restoreCamera();resetPlayerModel();releasePhysics(RE::PlayerCharacter::GetSingleton());keys.fill(false);workbench=false;requestWorkbench=false;creativeArmed=false;cameraMode=0;combat.elapsed=10;lastFrame=Clock::now();}
+void resetRuntime(){restoreCamera();restoreFlightFov();resetPlayerModel();releasePhysics(RE::PlayerCharacter::GetSingleton());keys.fill(false);workbench=false;requestWorkbench=false;flightTap.reset();cameraMode=0;combat.elapsed=10;lastFrame=Clock::now();}
 void startRuntime(){
     installPhysics();
     installInputFilters();
