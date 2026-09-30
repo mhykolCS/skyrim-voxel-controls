@@ -93,7 +93,7 @@ void draw(const Snapshot& state) {
     if(state.debug){
         ImGui::SetNextWindowPos({22,24},ImGuiCond_Always);ImGui::SetNextWindowBgAlpha(.85f);
         ImGui::Begin("Voxel diagnostics",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoInputs|ImGuiWindowFlags_NoSavedSettings);
-        ImGui::Text("VoxelControls 0.1.3 / Skyrim 1.7.104 / %.1f FPS",ImGui::GetIO().Framerate);
+        ImGui::Text("VoxelControls 0.2.0 / Skyrim 1.7.104 / %.1f FPS",ImGui::GetIO().Framerate);
         ImGui::Text("%s / %s",state.enabled?"ENABLED":"VANILLA",modeName(state.mode));
         ImGui::Text("XYZ: %.2f / %.2f / %.2f (Skyrim units)",state.position.x,state.position.y,state.position.z);
         ImGui::Text("Velocity: %.2f / %.2f / %.2f m/s",state.velocity.x,state.velocity.y,state.velocity.z);
@@ -122,9 +122,10 @@ void draw(const Snapshot& state) {
         ImGui::SetNextWindowPos({22,display.y-48},ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(.7f);
         ImGui::Begin("Voxel ready",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoInputs|ImGuiWindowFlags_NoSavedSettings);
-        ImGui::TextColored({.7f,.89f,.52f,1},"VoxelControls 0.1.3  /  %s  /  F3 diagnostics",state.enabled?"READY":"VANILLA");ImGui::End();
+        ImGui::TextColored({.7f,.89f,.52f,1},"VoxelControls 0.2.0  /  %s  /  F3 diagnostics",state.enabled?"READY":"VANILLA");ImGui::End();
     }
     if(state.workbench)drawWorkbench(state);
+    drawInventory(state,device);
 }
 HRESULT STDMETHODCALLTYPE present(IDXGISwapChain* swap,UINT interval,UINT flags) {
     if(swap!=gameSwapChain)return originalPresent(swap,interval,flags);
@@ -148,11 +149,22 @@ HRESULT STDMETHODCALLTYPE present(IDXGISwapChain* swap,UINT interval,UINT flags)
             auto now=std::chrono::steady_clock::now();io.DeltaTime=std::clamp(std::chrono::duration<float>(now-previousPresent).count(),.001f,.2f);previousPresent=now;
             cursorX=std::clamp(cursorX+input.dx,0.f,io.DisplaySize.x);cursorY=std::clamp(cursorY+input.dy,0.f,io.DisplaySize.y);
             static bool wasWorkbench=false;
-            if(state.workbench&&!wasWorkbench){cursorX=io.DisplaySize.x/2;cursorY=io.DisplaySize.y/2;}
-            wasWorkbench=state.workbench;io.MouseDrawCursor=state.workbench;
+            const bool panelOpen=state.workbench||state.inventoryOpen;
+            if(panelOpen!=wasWorkbench){io.ClearInputKeys();if(panelOpen){cursorX=io.DisplaySize.x/2;cursorY=io.DisplaySize.y/2;}}
+            wasWorkbench=panelOpen;io.MouseDrawCursor=panelOpen;
             io.AddMousePosEvent(cursorX,cursorY);
-            for(int i=0;i<3;++i)io.AddMouseButtonEvent(i,state.workbench&&input.buttons[i]);
-            io.AddMouseWheelEvent(0,state.workbench?input.wheel:0);
+            for(int i=0;i<3;++i)io.AddMouseButtonEvent(i,panelOpen&&input.buttons[i]);
+            io.AddMouseWheelEvent(0,panelOpen?input.wheel:0);
+            if(state.inventoryOpen){
+                for(auto c:input.characters)if(c>=32)io.AddInputCharacter(c);
+                for(auto [key,pressed]:input.keyboard){
+                    ImGuiKey mapped=ImGuiKey_None;
+                    switch(key){case 0x0E:mapped=ImGuiKey_Backspace;break;case 0x0F:mapped=ImGuiKey_Tab;break;case 0x1C:mapped=ImGuiKey_Enter;break;
+                    case 0xCB:mapped=ImGuiKey_LeftArrow;break;case 0xCD:mapped=ImGuiKey_RightArrow;break;case 0xC7:mapped=ImGuiKey_Home;break;case 0xCF:mapped=ImGuiKey_End;break;case 0xD3:mapped=ImGuiKey_Delete;break;
+                    case 0x1D:case 0x9D:mapped=ImGuiMod_Ctrl;break;case 0x2A:case 0x36:mapped=ImGuiMod_Shift;break;case 0x1E:mapped=ImGuiKey_A;break;case 0x13:mapped=ImGuiKey_R;break;default:break;}
+                    if(mapped!=ImGuiKey_None)io.AddKeyEvent(mapped,pressed);
+                }
+            }
             ImGui_ImplDX11_NewFrame();ImGui::NewFrame();draw(state);ImGui::Render();
             ID3D11RenderTargetView* oldViews[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]{};ID3D11DepthStencilView* oldDepth{};
             context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT,oldViews,&oldDepth);context->OMSetRenderTargets(1,&view,nullptr);

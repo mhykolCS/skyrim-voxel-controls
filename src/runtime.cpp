@@ -2,6 +2,7 @@
 #include "voxel/runtime.hpp"
 #include <chrono>
 #include <numbers>
+#include <Windows.h>
 #ifdef VOXEL_PLAYTEST
 #include <fstream>
 #include <sstream>
@@ -57,7 +58,7 @@ ControlContext readControlContext(bool alchemyTransition=false) {
     result.world=player&&player->GetParentCell()&&player->Is3DLoaded()&&ui&&map&&input&&camera&&
         !ui->IsMenuOpen(RE::MainMenu::MENU_NAME);
     if(!result.world)return result;
-    result.paused=ui->GameIsPaused()||ui->IsMenuOpen(RE::Console::MENU_NAME)||ui->IsMenuOpen(RE::DialogueMenu::MENU_NAME);
+    result.paused=(ui->GameIsPaused()&&!inventoryOwnsPause())||ui->IsMenuOpen(RE::Console::MENU_NAME)||ui->IsMenuOpen(RE::DialogueMenu::MENU_NAME);
     std::uint32_t current{},stored{};map->GetControlsState(current,stored);
     // Crafting's saved flags now contain only Skyrim's state, never our mask.
     const auto flags=alchemyTransition?stored:current;
@@ -66,6 +67,7 @@ ControlContext readControlContext(bool alchemyTransition=false) {
     result.pov=allowed(Flag::kPOVSwitch);result.jumping=allowed(Flag::kJumping);
     result.sneaking=allowed(Flag::kSneaking);result.fighting=allowed(Flag::kFighting);
     result.activate=allowed(Flag::kActivate);
+    result.menus=allowed(Flag::kMenu);
     result.movementHandler=input->movementHandler&&input->movementHandler->IsInputEventHandlingEnabled();
     result.inputBlocked=input->blockPlayerInput;result.scriptedPOV=input->data.povScriptMode;
     const auto& playerFlags=player->GetPlayerRuntimeData().playerFlags;
@@ -81,12 +83,19 @@ ControlContext readControlContext(bool alchemyTransition=false) {
     return result;
 }
 
+bool inventoryChord(const RE::ButtonEvent* button) {
+    if(!button||button->device!=RE::INPUT_DEVICE::kKeyboard||button->GetIDCode()!=0x12)return false;
+    return keys[0x2A]||keys[0x36]||(GetAsyncKeyState(VK_SHIFT)&0x8000);
+}
+
 template<class Handler,std::uint32_t Mask,std::size_t Table=0>
 struct NativeInputFilter {
     using CanProcess=bool(*)(RE::PlayerInputHandler*,RE::InputEvent*);
     static inline CanProcess original{};
     static bool canProcess(RE::PlayerInputHandler* handler,RE::InputEvent* event) {
         const auto button=event?event->AsButtonEvent():nullptr;
+        if(!(button&&button->IsUp())&&(inventoryIsOpen()||
+            (Mask==std::uint32_t(Flag::kActivate)&&inventoryChord(button)&&allowsAction(readControlContext(),Action::Inventory))))return false;
         if((suppressedNative.load()&Mask)&&controlMode(readControlContext())==ControlMode::Gameplay&&
            !(button&&button->IsUp())) {++filteredInputs;return false;}
         return original(handler,event);
@@ -309,7 +318,7 @@ void playtest() {
         if(factory)if(auto script=factory->Create()){script->SetCommand(command);script->CompileAndRun(player);delete script;}
     } else if(op=="action") {
         std::string name;int value{};input>>name>>value;
-        const std::map<std::string,Action> actions{{"debug",Action::ToggleDebug},{"camera",Action::Camera},{"creative",Action::Creative},{"glide",Action::Glide},{"workbench",Action::Workbench},{"craft",Action::Craft},{"attack",Action::Attack},{"cast",Action::Cast},{"enable",Action::ToggleEnabled}};
+        const std::map<std::string,Action> actions{{"debug",Action::ToggleDebug},{"camera",Action::Camera},{"creative",Action::Creative},{"glide",Action::Glide},{"workbench",Action::Workbench},{"craft",Action::Craft},{"attack",Action::Attack},{"cast",Action::Cast},{"enable",Action::ToggleEnabled},{"inventory",Action::Inventory},{"closeInventory",Action::CloseInventory}};
         if(auto found=actions.find(name);found!=actions.end())enqueue(found->second,value);
     } else if(op=="input") {
         unsigned key{};double duration{};input>>std::hex>>key>>std::dec>>duration;
@@ -368,23 +377,26 @@ void update() {
     {std::lock_guard lock(sharedMutex);pending.swap(commands);}
     for(auto command:pending) {
         if(command.action==Action::ToggleDebug){debug=!debug;continue;}
-        if(command.action==Action::ToggleEnabled){enabled=!enabled;workbench=false;if(!enabled)restoreCamera();reserveKeys(enabled);notify(enabled?"Voxel controls enabled":"Vanilla controls restored");continue;}
+        if(command.action==Action::ToggleEnabled){enabled=!enabled;workbench=false;setInventoryOpen(false);if(!enabled)restoreCamera();reserveKeys(enabled);notify(enabled?"Voxel controls enabled":"Vanilla controls restored");continue;}
         if(command.action==Action::CloseWorkbench){workbench=false;continue;}
+        if(command.action==Action::CloseInventory||(command.action==Action::Inventory&&inventoryIsOpen())){setInventoryOpen(false);keys.fill(false);flightTap.reset();continue;}
         const auto actionContext=readControlContext();
         if(!allowsAction(actionContext,command.action)) {
             if(debug)spdlog::info("Gameplay action {} suppressed by Skyrim context",int(command.action));
-            if(command.action==Action::Creative||command.action==Action::Camera)
-                notify(std::string(command.action==Action::Creative?"Flight unavailable: ":"Camera unavailable: ")+actionBlockedReason(actionContext,command.action));
+            if(command.action==Action::Creative||command.action==Action::Camera||command.action==Action::Inventory)
+                notify(std::string(command.action==Action::Creative?"Flight unavailable: ":command.action==Action::Inventory?"Inventory unavailable: ":"Camera unavailable: ")+actionBlockedReason(actionContext,command.action));
             continue;
         }
         switch(command.action) {
+            case Action::Inventory:workbench=false;keys.fill(false);flightTap.reset();setInventoryOpen(true);break;
+            case Action::UseItem:case Action::DropItem:case Action::PinItem:case Action::NativeInventory:{auto message=inventoryCommand(command);if(!message.empty())notify(message);break;}
             case Action::Camera:setCamera((cameraMode+1)%3);break;
             case Action::Creative:
                 if(!workbench){movement.setMode(movement.state.mode==Mode::Creative?Mode::Survival:Mode::Creative);flightTap.reset();
                     notify(movement.state.mode==Mode::Creative?"Creative flight: Space up, Shift down, Ctrl faster. Double Space to land.":"Flight off: Minecraft gravity restored");}break;
             case Action::Glide:if(!movement.state.grounded){movement.setMode(movement.state.mode==Mode::Glide?Mode::Survival:Mode::Glide);notify(movement.state.mode==Mode::Glide?"Gliding: steer with mouse, hold Ctrl to boost":"Glider folded");}break;
             case Action::Workbench:workbench=!workbench;break;
-            case Action::Craft:if(workbench)craft(player,command.value);break;
+            case Action::Craft:if(workbench||inventoryIsOpen())craft(player,command.value);break;
             case Action::SelectSpell:selectedSpell=std::clamp(command.value,0,2);break;
             case Action::Attack:if(!workbench)attack(player);break;
             case Action::Cast:if(!workbench&&meleeWeapon(player))cast(player);break;
@@ -393,10 +405,11 @@ void update() {
     }
     auto controller=world?player->GetCharController():nullptr;
     const auto controlContext=readControlContext();const auto controlState=controlMode(controlContext);
-    bool active=controlState==ControlMode::Gameplay&&controller;
+    if(controlState!=ControlMode::Gameplay)setInventoryOpen(false);
+    bool active=controlState==ControlMode::Gameplay&&controller&&!inventoryIsOpen();
     if(!active) {
-        releasePhysics(player,controlState==ControlMode::Paused);workbench=false;keys.fill(false);flightTap.reset();
-        if(controlState!=ControlMode::Paused){restoreCamera();restoreFlightFov();requestWorkbench=false;}
+        releasePhysics(player,controlState==ControlMode::Paused||inventoryIsOpen());workbench=false;keys.fill(false);flightTap.reset();
+        if(controlState!=ControlMode::Paused&&!inventoryIsOpen()){restoreCamera();restoreFlightFov();requestWorkbench=false;}
     }
     else {
         // A POV-only lock must release our camera adjustments without stopping
@@ -466,6 +479,7 @@ void update() {
     }
     Snapshot next;
     next.enabled=enabled;next.active=active;next.debug=debug;next.workbench=workbench;next.flightFov=float(flightFov.multiplier);
+    next.inventoryOpen=inventoryIsOpen();
     next.controlState=controlState;
     next.controlReason=actionBlockedReason(controlContext,Action::Creative);
     if(active&&next.controlReason.empty()&&!controlContext.pov)next.controlReason="Camera switching locked; movement and flight available";
@@ -479,7 +493,7 @@ void update() {
         next.location=player->GetParentCell()->GetName();next.melee=meleeWeapon(player);
         if(auto pick=RE::CrosshairPickData::GetSingleton())if(auto target=pick->targetActor.get())next.target=target->GetName();
         for(int i=0;i<3;++i)if(auto spell=spellAt(i))next.spells[i]=player->HasSpell(spell);
-        if(workbench) {
+        if(workbench||inventoryIsOpen()) {
             auto inventory=inventoryOf(player);
             for(auto& recipe:recipes()) {
                 RecipeView view;auto spell=recipe.spell?RE::TESForm::LookupByID<RE::SpellItem>(recipe.output):nullptr;
@@ -487,6 +501,7 @@ void update() {
                 for(auto ingredient:recipe.inputs)view.counts.push_back(inventory[ingredient.form]);
                 next.recipes.push_back(std::move(view));
             }
+            if(inventoryIsOpen())updateInventoryView(next);
         }
     }
     {std::lock_guard lock(sharedMutex);snapshot=std::move(next);}
@@ -496,6 +511,7 @@ public:
     RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* events,RE::BSTEventSource<RE::InputEvent*>*) override {
         if(!events)return RE::BSEventNotifyControl::kContinue;
         for(auto event=*events;event;event=event->next) {
+            if(inventoryIsOpen())if(auto character=event->AsCharEvent()){std::lock_guard lock(sharedMutex);pointer.characters.push_back(character->keyCode);}
             if(event->eventType==RE::INPUT_EVENT_TYPE::kMouseMove) {
                 auto mouse=static_cast<RE::MouseMoveEvent*>(event);std::lock_guard lock(sharedMutex);pointer.dx+=mouse->mouseInputX;pointer.dy+=mouse->mouseInputY;
             }
@@ -503,7 +519,14 @@ public:
             auto key=button->GetIDCode();bool down=button->IsDown();
             if(button->device==RE::INPUT_DEVICE::kKeyboard) {
                 if(key<keys.size())keys[key]=button->IsPressed();
+                if(inventoryIsOpen()){
+                    {std::lock_guard lock(sharedMutex);pointer.keyboard.emplace_back(key,button->IsPressed());}
+                    if(down&&(key==0x01||inventoryChord(button)))enqueue(Action::CloseInventory);
+                    else if(down&&key==0x44)enqueue(Action::ToggleEnabled);
+                    continue;
+                }
                 if(!down)continue;
+                if(inventoryChord(button)){enqueue(Action::Inventory);continue;}
                 switch(key) {
                     case 0x3D:enqueue(Action::ToggleDebug);break;
                     case 0x3F:enqueue(Action::Camera);break;
@@ -521,8 +544,10 @@ public:
                 }
             } else if(button->device==RE::INPUT_DEVICE::kMouse) {
                 {std::lock_guard lock(sharedMutex);if(key<3)pointer.buttons[key]=button->IsPressed();if(down&&key==8)pointer.wheel+=1;if(down&&key==9)pointer.wheel-=1;}
-                if(down&&key==0)enqueue(Action::Attack);
-                if(down&&key==1)enqueue(Action::Cast);
+                if(!inventoryIsOpen()){
+                    if(down&&key==0)enqueue(Action::Attack);
+                    if(down&&key==1)enqueue(Action::Cast);
+                }
             }
         }
         return RE::BSEventNotifyControl::kContinue;
@@ -561,11 +586,12 @@ class ControlSink final:public RE::BSTEventSink<RE::UserEventEnabled> {
 } controlSink;
 }
 Snapshot readSnapshot(){std::lock_guard lock(sharedMutex);return snapshot;}
-void enqueue(Action action,int value){std::lock_guard lock(sharedMutex);commands.push_back({action,value});}
-PointerInput takePointerInput(){std::lock_guard lock(sharedMutex);auto result=pointer;pointer.dx=pointer.dy=pointer.wheel=0;return result;}
+void enqueue(Action action,int value,ItemKey item){std::lock_guard lock(sharedMutex);commands.push_back({action,value,item});}
+PointerInput takePointerInput(){std::lock_guard lock(sharedMutex);auto result=pointer;pointer.dx=pointer.dy=pointer.wheel=0;pointer.keyboard.clear();pointer.characters.clear();return result;}
 void queueFrame(){if(!frameQueued.exchange(true))SKSE::GetTaskInterface()->AddTask(update);}
-void resetRuntime(){restoreCamera();restoreFlightFov();resetPlayerModel();releasePhysics(RE::PlayerCharacter::GetSingleton());keys.fill(false);workbench=false;requestWorkbench=false;flightTap.reset();cameraMode=0;combat.elapsed=10;lastFrame=Clock::now();}
+void resetRuntime(){resetInventory();restoreCamera();restoreFlightFov();resetPlayerModel();releasePhysics(RE::PlayerCharacter::GetSingleton());keys.fill(false);workbench=false;requestWorkbench=false;flightTap.reset();cameraMode=0;combat.elapsed=10;lastFrame=Clock::now();}
 void startRuntime(){
+    initInventory();
     installPhysics();
     installInputFilters();
     RE::ControlMap::GetSingleton()->AddEventSink(&controlSink);

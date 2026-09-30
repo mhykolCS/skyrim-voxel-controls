@@ -6,14 +6,15 @@ namespace voxel {
 
 enum class Action {
     ToggleEnabled, ToggleDebug, Camera, Creative, Glide,
-    Workbench, CloseWorkbench, Craft, SelectSpell, Attack, Cast
+    Workbench, CloseWorkbench, Craft, SelectSpell, Attack, Cast,
+    Inventory, CloseInventory, UseItem, DropItem, PinItem, NativeInventory
 };
 
 enum class ControlMode { Unavailable, Disabled, Scripted, Paused, Gameplay };
 
 struct ControlContext {
     bool enabled{}, world{}, paused{}, gameplayCamera{};
-    bool movement{}, looking{}, pov{}, jumping{}, sneaking{}, fighting{}, activate{};
+    bool movement{}, looking{}, pov{}, jumping{}, sneaking{}, fighting{}, activate{}, menus{};
     bool movementHandler{}, inputBlocked{}, scriptedPOV{}, aiDriven{}, characterSetup{};
     bool scene{}, actorRestricted{}, furniture{};
 };
@@ -42,12 +43,13 @@ constexpr ControlMode controlMode(const ControlContext& context) {
 }
 
 constexpr bool allowsAction(const ControlContext& context,Action action) {
-    if(action==Action::ToggleEnabled||action==Action::ToggleDebug||action==Action::CloseWorkbench)return true;
+    if(action==Action::ToggleEnabled||action==Action::ToggleDebug||action==Action::CloseWorkbench||action==Action::CloseInventory)return true;
     if(controlMode(context)!=ControlMode::Gameplay)return false;
     switch(action) {
         // Helgen can keep POV switching locked after releasing movement/jumping.
         // This permission belongs to the camera shortcut, not the physics gate.
         case Action::Camera:return context.pov;
+        case Action::Inventory:case Action::UseItem:case Action::DropItem:case Action::PinItem:case Action::NativeInventory:return context.menus;
         case Action::Creative:case Action::Glide:return context.jumping;
         case Action::Workbench:case Action::Craft:return context.activate;
         case Action::Attack:case Action::Cast:case Action::SelectSpell:return context.fighting;
@@ -68,6 +70,7 @@ constexpr const char* actionBlockedReason(const ControlContext& context,Action a
                 case Action::Camera:return "Skyrim has locked camera switching";
                 case Action::Creative:case Action::Glide:return "Skyrim has locked jumping";
                 case Action::Workbench:case Action::Craft:return "Skyrim has locked activation";
+                case Action::Inventory:case Action::UseItem:case Action::DropItem:case Action::PinItem:case Action::NativeInventory:return "Skyrim has locked inventory menus";
                 default:return "Skyrim has locked combat";
             }
     }

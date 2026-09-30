@@ -1,7 +1,7 @@
 #include "voxel/pch.hpp"
 #include "voxel/runtime.hpp"
 SKSEPluginInfo(
-    .Version=REL::Version{0,1,3,0},
+    .Version=REL::Version{0,2,0,0},
     .Name="VoxelControls"sv,
     .Author="VoxelControls contributors"sv,
     .StructCompatibility=SKSE::StructCompatibility::Dependent,
@@ -14,7 +14,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* skse) {
     auto sink=std::make_shared<spdlog::sinks::basic_file_sink_mt>((*folder/"VoxelControls.log").string(),true);
     auto logger=std::make_shared<spdlog::logger>("VoxelControls",sink);
     spdlog::set_default_logger(logger);spdlog::flush_on(spdlog::level::info);
-    spdlog::info("VoxelControls 0.1.3 loading; runtime {}",skse->RuntimeVersion().string());
+    spdlog::info("VoxelControls 0.2.0 loading; runtime {}",skse->RuntimeVersion().string());
     // This adapter is intentionally restricted to the binary tested locally.
     if(skse->RuntimeVersion()!=REL::Version{1,7,104,0}) {
         spdlog::error("Unsupported runtime. This build requires Steam Skyrim 1.7.104.0");return false;

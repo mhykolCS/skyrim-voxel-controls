@@ -12,19 +12,20 @@ void check(bool value,const char* message) {
 ControlContext gameplay() {
     ControlContext c;
     c.enabled=c.world=c.gameplayCamera=c.movement=c.looking=c.pov=true;
-    c.jumping=c.sneaking=c.fighting=c.activate=c.movementHandler=true;
+    c.jumping=c.sneaking=c.fighting=c.activate=c.movementHandler=c.menus=true;
     return c;
 }
 
 void expectSuspended(const ControlContext& c) {
     constexpr std::array actions{Action::Camera,Action::Creative,Action::Glide,
         Action::Workbench,Action::Craft,Action::SelectSpell,
-        Action::Attack,Action::Cast};
+        Action::Attack,Action::Cast,Action::Inventory,Action::UseItem,Action::DropItem,Action::PinItem};
     check(controlMode(c)!=ControlMode::Gameplay,"scripted state cannot drive physics");
     for(auto action:actions)check(!allowsAction(c,action),"scripted state rejects every gameplay shortcut");
     check(allowsAction(c,Action::ToggleDebug),"diagnostics remain available");
     check(allowsAction(c,Action::ToggleEnabled),"F10 remains available");
     check(allowsAction(c,Action::CloseWorkbench),"workbench can always close");
+    check(allowsAction(c,Action::CloseInventory),"inventory can always close");
 }
 
 int main() {
@@ -67,6 +68,8 @@ int main() {
     check(!allowsAction(c,Action::Attack)&&!allowsAction(c,Action::Cast),"custom combat honors fighting restriction");
     c=free;c.activate=false;
     check(!allowsAction(c,Action::Workbench)&&!allowsAction(c,Action::Craft),"workbench honors activation restriction");
+    c=free;c.menus=false;
+    check(!allowsAction(c,Action::Inventory)&&!allowsAction(c,Action::UseItem)&&!allowsAction(c,Action::DropItem),"inventory respects Skyrim menu locks");
     // A quest takes control after ordinary movement has already been running.
     c=free;check(allowsAction(c,Action::Camera),"camera works before scene");
     c.movement=false;expectSuspended(c);
