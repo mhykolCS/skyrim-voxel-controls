@@ -1,0 +1,32 @@
+name: Native core
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Configure standalone core
+        run: cmake -S . -B build-ci -G Ninja -DVOXEL_BUILD_PLUGIN=OFF -DCMAKE_BUILD_TYPE=Debug
+      - name: Build
+        run: cmake --build build-ci --parallel 2
+      - name: Test movement, combat, and recipes
+        run: ctest --test-dir build-ci --output-on-failure
+      - name: Check tool syntax
+        run: |
+          python3 -m py_compile tools/*.py
+          bash -n tools/build-windows.sh tools/launch-skyrim.sh

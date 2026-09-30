@@ -1,5 +1,7 @@
 # VoxelControls
 
+[![Native core](https://github.com/mhykolCS/skyrim-voxel-controls/actions/workflows/core.yml/badge.svg)](https://github.com/mhykolCS/skyrim-voxel-controls/actions/workflows/core.yml)
+
 A native Skyrim mod exploring Minecraft-inspired movement, flight, melee combat,
 and a tech-mod-style alchemy and spell workbench. It uses Skyrim's world,
 collision system, actors, spells, and inventory. Minecraft does not need to run.
@@ -104,6 +106,10 @@ cmake --build build-native
 ctest --test-dir build-native --output-on-failure
 ```
 
+GitHub Actions runs this standalone build and checks the Python/shell tool syntax
+on pushes and pull requests. It does not launch Skyrim or validate the Windows
+game adapter; those live checks are recorded separately in `docs/VALIDATION.md`.
+
 The Windows DLL is built with clang-cl, the Microsoft SDK/CRT obtained by xwin,
 and vcpkg. The setup used here follows CommonLibSSE-NG's
 [Linux cross-compilation guide](https://github.com/alandtse/CommonLibSSE-NG/blob/ng/examples/linux-cross-compile/README.md).
@@ -117,7 +123,7 @@ python tools/install.py '/path/to/Skyrim Special Edition'
 ```
 
 Install the official SKSE and Address Library separately. Start the game through
-`skse64_loader.exe`. On this Linux installation, use the **Skyrim - VoxelControls**
+`skse64_loader.exe`. On the original development machine, use the **Skyrim - VoxelControls**
 application launcher or run `skyrim-voxel-controls` in a terminal. The ordinary
 Steam Play action does not select SKSE automatically. The plugin log is in the game's Documents directory under
 `My Games/Skyrim Special Edition/SKSE/VoxelControls.log`.
