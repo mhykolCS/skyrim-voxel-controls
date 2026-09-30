@@ -25,8 +25,7 @@ Combat combat;
 Clock::time_point lastFrame=Clock::now(),lastJump{},lastCast{};
 RE::bhkCharacterController* ownedController{};
 float savedGravity{};
-std::uint32_t ownedFlags{};
-std::uint32_t pendingRestoreFlags{};
+std::atomic<std::uint32_t> suppressedNative{};
 bool enabled=true,debug=false,workbench=false,creativeArmed=false;
 bool requestWorkbench=false;
 int cameraMode=0,selectedSpell=0;
@@ -41,6 +40,72 @@ RE::hkVector4 desiredVelocity{};
 using VelocitySetter=void(*)(RE::bhkCharacterController*,const RE::hkVector4&);
 VelocitySetter proxyVelocity{},rigidVelocity{};
 std::atomic<std::uint64_t> physicsCalls{};
+std::atomic<std::uint64_t> filteredInputs{};
+
+ControlContext readControlContext(bool alchemyTransition=false) {
+    ControlContext result;result.enabled=enabled;
+    auto player=RE::PlayerCharacter::GetSingleton();auto ui=RE::UI::GetSingleton();
+    auto map=RE::ControlMap::GetSingleton();auto input=RE::PlayerControls::GetSingleton();
+    auto camera=RE::PlayerCamera::GetSingleton();
+    result.world=player&&player->GetParentCell()&&player->Is3DLoaded()&&ui&&map&&input&&camera&&
+        !ui->IsMenuOpen(RE::MainMenu::MENU_NAME);
+    if(!result.world)return result;
+    result.paused=ui->GameIsPaused()||ui->IsMenuOpen(RE::Console::MENU_NAME)||ui->IsMenuOpen(RE::DialogueMenu::MENU_NAME);
+    std::uint32_t current{},stored{};map->GetControlsState(current,stored);
+    // Crafting's saved flags now contain only Skyrim's state, never our mask.
+    const auto flags=alchemyTransition?stored:current;
+    auto allowed=[flags](Flag flag){return (flags&std::uint32_t(flag))!=0;};
+    result.movement=allowed(Flag::kMovement);result.looking=allowed(Flag::kLooking);
+    result.pov=allowed(Flag::kPOVSwitch);result.jumping=allowed(Flag::kJumping);
+    result.sneaking=allowed(Flag::kSneaking);result.fighting=allowed(Flag::kFighting);
+    result.activate=allowed(Flag::kActivate);
+    result.movementHandler=input->movementHandler&&input->movementHandler->IsInputEventHandlingEnabled();
+    result.inputBlocked=input->blockPlayerInput;result.scriptedPOV=input->data.povScriptMode;
+    const auto& playerFlags=player->GetPlayerRuntimeData().playerFlags;
+    result.aiDriven=playerFlags.aiControlledToPos||playerFlags.aiControlledFromPos||playerFlags.aiControlledPackage;
+    result.characterSetup=player->GetGameStatsData().byCharGenFlag.any(RE::PlayerCharacter::ByCharGenFlag::kDisableSaving,RE::PlayerCharacter::ByCharGenFlag::kDisableWaiting,RE::PlayerCharacter::ByCharGenFlag::kShowControlsDisabledMessage);
+    result.scene=player->GetCurrentScene()!=nullptr;
+    result.actorRestricted=player->IsDead()||player->IsInKillMove()||player->IsInRagdollState()||
+        player->IsOnMount()||player->AsActorState()->IsSwimming();
+    result.furniture=!alchemyTransition&&(player->GetOccupiedFurniture()||
+        player->AsActorState()->GetSitSleepState()!=RE::SIT_SLEEP_STATE::kNormal);
+    result.gameplayCamera=alchemyTransition||(camera->currentState&&
+        (camera->currentState->id==RE::CameraState::kFirstPerson||camera->currentState->id==RE::CameraState::kThirdPerson));
+    return result;
+}
+
+template<class Handler,std::uint32_t Mask,std::size_t Table=0>
+struct NativeInputFilter {
+    using CanProcess=bool(*)(RE::PlayerInputHandler*,RE::InputEvent*);
+    static inline CanProcess original{};
+    static bool canProcess(RE::PlayerInputHandler* handler,RE::InputEvent* event) {
+        const auto button=event?event->AsButtonEvent():nullptr;
+        if((suppressedNative.load()&Mask)&&controlMode(readControlContext())==ControlMode::Gameplay&&
+           !(button&&button->IsUp())) {++filteredInputs;return false;}
+        return original(handler,event);
+    }
+    static void install() {
+        REL::Relocation<std::uintptr_t> table{Handler::VTABLE[Table]};
+        original=reinterpret_cast<CanProcess>(table.write_vfunc(1,canProcess));
+    }
+};
+void installInputFilters() {
+    constexpr auto movementMask=std::uint32_t(Flag::kMovement);
+    NativeInputFilter<RE::MovementHandler,movementMask>::install();
+    NativeInputFilter<RE::RunHandler,movementMask>::install();
+    NativeInputFilter<RE::SprintHandler,movementMask>::install();
+    NativeInputFilter<RE::AutoMoveHandler,movementMask>::install();
+    NativeInputFilter<RE::ToggleRunHandler,movementMask>::install();
+    NativeInputFilter<RE::JumpHandler,std::uint32_t(Flag::kJumping)>::install();
+    NativeInputFilter<RE::SneakHandler,std::uint32_t(Flag::kSneaking)>::install();
+    NativeInputFilter<RE::TogglePOVHandler,std::uint32_t(Flag::kPOVSwitch)>::install();
+    NativeInputFilter<RE::AttackBlockHandler,std::uint32_t(Flag::kFighting)>::install();
+    NativeInputFilter<RE::LookHandler,std::uint32_t(Flag::kLooking)>::install();
+    NativeInputFilter<RE::ActivateHandler,std::uint32_t(Flag::kActivate)>::install();
+    NativeInputFilter<RE::FirstPersonState,std::uint32_t(Flag::kWheelZoom),1>::install();
+    NativeInputFilter<RE::ThirdPersonState,std::uint32_t(Flag::kWheelZoom),1>::install();
+    spdlog::info("Native input filters installed; Skyrim control flags remain authoritative");
+}
 
 void applyVelocity(RE::bhkCharacterController* controller,const RE::hkVector4& requested,VelocitySetter original) {
     RE::hkVector4 velocity=requested;
@@ -68,20 +133,11 @@ Vec3 unpack(const RE::hkVector4& vector) {
 }
 RE::hkVector4 pack(Vec3 v) {return {float(v.x),float(v.y),float(v.z),0};}
 void notify(std::string text) {status=std::move(text);RE::SendHUDMessage::ShowHUDMessage(status.c_str());spdlog::info("{}",status);}
-void controls(std::uint32_t desired) {
-    auto map=RE::ControlMap::GetSingleton();if(!map)return;
-    std::uint32_t current,stored;map->GetControlsState(current,stored);
-    auto release=ownedFlags&~desired;
-    if(release) map->ToggleControls(static_cast<Flag>(release),true,false);
-    ownedFlags&=desired;
-    auto acquire=desired&current&~ownedFlags;
-    if(acquire) {map->ToggleControls(static_cast<Flag>(acquire),false,false);ownedFlags|=acquire;}
-}
 void releasePhysics(RE::PlayerCharacter* player,bool preserveMode=false) {
     const auto mode=movement.state.mode;const auto velocity=movement.state.velocity;
     {std::lock_guard lock(physicsMutex);physicsPlayer=nullptr;}
     if(ownedController&&player&&player->GetCharController()==ownedController) ownedController->gravity=savedGravity;
-    ownedController=nullptr;controls(0);movement.reset();
+    ownedController=nullptr;suppressedNative=0;movement.reset();
     if(preserveMode){movement.setMode(mode);movement.state.velocity=velocity;}
 }
 void reserveKeys(bool reserve) {
@@ -119,6 +175,7 @@ void setCamera(int mode) {
     notify(mode==0?"Camera: first person":mode==1?"Camera: third person":"Camera: front view");
 }
 void restoreCamera() {
+    if(!cameraOwned)return;
     if(auto third=thirdPerson()) {
         third->freeRotationEnabled=false;third->freeRotation={0,0};
         if(cameraOwned){third->targetZoomOffset=third->currentZoomOffset=third->savedZoomOffset=savedZoom;third->posOffsetExpected=third->posOffsetActual=savedCameraOffset;}
@@ -198,8 +255,20 @@ void cast(RE::PlayerCharacter* player) {
     spdlog::info("Cast matrix {:08X} at cost {:.1f}",spell->GetFormID(),cost);
 }
 #ifdef VOXEL_PLAYTEST
+void playtestButton(unsigned key,float value,float held) {
+    auto map=RE::ControlMap::GetSingleton();
+    auto button=RE::ButtonEvent::Create(RE::INPUT_DEVICE::kKeyboard,
+        map->GetUserEventName(key,RE::INPUT_DEVICE::kKeyboard),key,value,held);
+    if(button){RE::InputEvent* event=button;RE::BSInputDeviceManager::GetSingleton()->SendEvent(&event);delete button;}
+}
 void playtest() {
     static auto lastPoll=Clock::now();static unsigned heldKey=0;static auto releaseKey=Clock::now();
+    static unsigned nativeKey=0;static auto nativeStart=Clock::now(),nativeEnd=Clock::now();
+    if(nativeKey){
+        const float held=std::max(.001f,std::chrono::duration<float>(Clock::now()-nativeStart).count());
+        const bool released=Clock::now()>=nativeEnd;
+        playtestButton(nativeKey,released?0.f:1.f,held);if(released)nativeKey=0;
+    }
     if(heldKey&&Clock::now()>=releaseKey){keys[heldKey]=false;heldKey=0;}
     if(Clock::now()-lastPoll<std::chrono::milliseconds(200))return;
     lastPoll=Clock::now();
@@ -218,7 +287,15 @@ void playtest() {
         std::string name;int value{};input>>name>>value;
         const std::map<std::string,Action> actions{{"debug",Action::ToggleDebug},{"camera",Action::Camera},{"creative",Action::Creative},{"glide",Action::Glide},{"workbench",Action::Workbench},{"craft",Action::Craft},{"attack",Action::Attack},{"cast",Action::Cast},{"enable",Action::ToggleEnabled}};
         if(auto found=actions.find(name);found!=actions.end())enqueue(found->second,value);
-    } else if(op=="hold") {unsigned key;double duration;input>>std::hex>>key>>std::dec>>duration;if(key>0&&key<keys.size()&&duration>0&&duration<=10){heldKey=key;keys[key]=true;releaseKey=Clock::now()+std::chrono::milliseconds(int(duration*1000));}}
+    } else if(op=="input") {
+        unsigned key{};double duration{};input>>std::hex>>key>>std::dec>>duration;
+        if(key>0&&key<keys.size()&&duration>0&&duration<=10){
+            if(nativeKey)playtestButton(nativeKey,0.f,.01f);
+            nativeKey=key;nativeStart=Clock::now();nativeEnd=nativeStart+std::chrono::milliseconds(int(duration*1000));
+            playtestButton(key,1.f,0.f);
+        }
+    } else if(op=="ai"&&player){bool value{};input>>value;player->SetAIDriven(value);}
+    else if(op=="hold") {unsigned key;double duration;input>>std::hex>>key>>std::dec>>duration;if(key>0&&key<keys.size()&&duration>0&&duration<=10){heldKey=key;keys[key]=true;releaseKey=Clock::now()+std::chrono::milliseconds(int(duration*1000));}}
     else if(op=="spawn"&&player&&player->GetParentCell()) {
         if(auto base=RE::TESForm::LookupByID<RE::TESBoundObject>(0x1BCD8)) {
             auto reference=player->PlaceObjectAtMe(base,false);
@@ -229,7 +306,9 @@ void playtest() {
         if(target)spdlog::info("PLAYTEST target health {:.3f}",target->AsActorValueOwner()->GetActorValue(RE::ActorValue::kHealth));
         if(player){auto inv=inventoryOf(player);for(auto& recipe:recipes())spdlog::info("PLAYTEST inventory {:08X} count {}",recipe.output,inv[recipe.output]);}
         auto ui=RE::UI::GetSingleton();std::uint32_t current{},stored{};RE::ControlMap::GetSingleton()->GetControlsState(current,stored);
-        spdlog::info("PLAYTEST paused={} crafting={} tutorial={} occupied={} controls={:X} owned={:X} pendingWorkbench={}",ui->GameIsPaused(),ui->IsMenuOpen(RE::CraftingMenu::MENU_NAME),ui->IsMenuOpen(RE::TutorialMenu::MENU_NAME),bool(player&&player->GetOccupiedFurniture()),current,ownedFlags,requestWorkbench);
+        const auto context=readControlContext();auto camera=RE::PlayerCamera::GetSingleton();
+        spdlog::info("PLAYTEST paused={} crafting={} tutorial={} occupied={} controls={:X} stored={:X} suppressed={:X} pendingWorkbench={} policy={} ai={} characterSetup={} scene={} inputBlocked={} povScript={} camera={} filtered={}",ui->GameIsPaused(),ui->IsMenuOpen(RE::CraftingMenu::MENU_NAME),ui->IsMenuOpen(RE::TutorialMenu::MENU_NAME),bool(player&&player->GetOccupiedFurniture()),current,stored,suppressedNative.load(),requestWorkbench,int(controlMode(context)),context.aiDriven,context.characterSetup,context.scene,context.inputBlocked,context.scriptedPOV,camera&&camera->currentState?int(camera->currentState->id):-1,filteredInputs.load());
+        if(player){auto pos=player->GetPosition();auto cc=player->GetCharController();spdlog::info("PLAYTEST xyz=({:.2f},{:.2f},{:.2f}) gravity={} physicsCalls={}",pos.x,pos.y,pos.z,cc?cc->gravity:-1.f,physicsCalls.load());}
     } else if(op=="alchemy"&&player) {
         if(auto base=RE::TESForm::LookupByID<RE::TESBoundObject>(0xBAD0C))if(auto ref=player->PlaceObjectAtMe(base,false)) {
             auto pos=player->GetPosition();auto yaw=player->GetAngleZ();
@@ -256,11 +335,15 @@ void update() {
         if(command.action==Action::ToggleDebug){debug=!debug;continue;}
         if(command.action==Action::ToggleEnabled){enabled=!enabled;workbench=false;if(!enabled)restoreCamera();reserveKeys(enabled);notify(enabled?"Voxel controls enabled":"Vanilla controls restored");continue;}
         if(command.action==Action::CloseWorkbench){workbench=false;continue;}
-        if(!enabled||!world||paused)continue;
+        if(!allowsAction(readControlContext(),command.action)) {
+            if(debug)spdlog::info("Gameplay action {} suppressed by Skyrim context",int(command.action));
+            continue;
+        }
         switch(command.action) {
             case Action::Camera:setCamera((cameraMode+1)%3);break;
             case Action::Creative:creativeArmed=!creativeArmed;movement.setMode(creativeArmed?Mode::Creative:Mode::Survival);notify(creativeArmed?"Creative flight: Space up, Shift down":"Survival movement");break;
             case Action::Glide:if(!movement.state.grounded){creativeArmed=false;movement.setMode(movement.state.mode==Mode::Glide?Mode::Survival:Mode::Glide);notify(movement.state.mode==Mode::Glide?"Gliding: steer with mouse, hold Ctrl to boost":"Glider folded");}break;
+            case Action::ToggleHover:if(creativeArmed)movement.setMode(movement.state.mode==Mode::Creative?Mode::Survival:Mode::Creative);break;
             case Action::Workbench:workbench=!workbench;break;
             case Action::Craft:if(workbench)craft(player,command.value);break;
             case Action::SelectSpell:selectedSpell=std::clamp(command.value,0,2);break;
@@ -270,33 +353,29 @@ void update() {
         }
     }
     auto controller=world?player->GetCharController():nullptr;
-    // Crafting saves the pre-menu controls, including the flags owned by this
-    // plugin. Restore only those flags after its asynchronous close finishes.
-    if(pendingRestoreFlags&&!paused&&!ui->IsMenuOpen(RE::CraftingMenu::MENU_NAME)&&!player->GetOccupiedFurniture()) {
-        RE::ControlMap::GetSingleton()->ToggleControls(static_cast<Flag>(pendingRestoreFlags),true,false);
-        pendingRestoreFlags=0;
+    const auto controlContext=readControlContext();const auto controlState=controlMode(controlContext);
+    bool active=controlState==ControlMode::Gameplay&&controller;
+    if(!active) {
+        releasePhysics(player,controlState==ControlMode::Paused);workbench=false;keys.fill(false);
+        if(controlState!=ControlMode::Paused){restoreCamera();creativeArmed=false;requestWorkbench=false;lastJump={};}
     }
-    bool active=enabled&&!paused&&controller&&!player->IsDead()&&!player->IsInKillMove()&&!player->IsInRagdollState()&&!player->IsOnMount()&&!player->AsActorState()->IsSwimming()&&player->AsActorState()->GetSitSleepState()==RE::SIT_SLEEP_STATE::kNormal;
-    if(active) {
-        auto map=RE::ControlMap::GetSingleton();
-        // Respect quests/cutscenes that disabled movement before we acquired it.
-        if(!(ownedFlags&1)&&!map->IsMovementControlsEnabled())active=false;
-    }
-    if(!active) {releasePhysics(player,enabled&&world);workbench=false;keys.fill(false);}
     else {
         if(requestWorkbench){workbench=true;requestWorkbench=false;}
-        if(controller!=ownedController){releasePhysics(player,true);ownedController=controller;savedGravity=controller->gravity;}
+        if(controller!=ownedController){
+            releasePhysics(player,true);ownedController=controller;savedGravity=controller->gravity;
+            auto input=RE::PlayerControls::GetSingleton();input->data.moveInputVec={};input->data.prevMoveVec={};input->data.autoMove=false;
+        }
         std::uint32_t flags=std::uint32_t(Flag::kMovement)|std::uint32_t(Flag::kJumping)|std::uint32_t(Flag::kSneaking)|std::uint32_t(Flag::kPOVSwitch);
         bool melee=meleeWeapon(player);
         if(melee||workbench)flags|=std::uint32_t(Flag::kFighting);
         if(workbench)flags|=std::uint32_t(Flag::kLooking)|std::uint32_t(Flag::kWheelZoom)|std::uint32_t(Flag::kActivate);
-        controls(flags);
+        suppressedNative=flags;
         RE::hkVector4 engineVelocity;controller->GetLinearVelocityImpl(engineVelocity);
         bool grounded=controller->surfaceInfo.supportedState==RE::hkpSurfaceInfo::SupportedState::kSupported&&movement.state.velocity.z<=0.1;
         Input input;
         input.forward=double(keys[0x11])-double(keys[0x1F]);input.strafe=double(keys[0x20])-double(keys[0x1E]);
         input.yaw=player->GetAngleZ();input.pitch=player->GetAngleX();
-        input.jump=keys[0x39];input.descend=keys[0x2A]||keys[0x36];input.sprint=keys[0x1D]||keys[0x9D];input.boost=input.sprint;
+        input.jump=controlContext.jumping&&keys[0x39];input.descend=controlContext.sneaking&&(keys[0x2A]||keys[0x36]);input.sprint=keys[0x1D]||keys[0x9D];input.boost=input.sprint;
         if(workbench)input={};
         if(input.boost&&movement.state.mode==Mode::Glide) {
             auto values=player->AsActorValueOwner();float cost=float(std::min(dt,.2)*15);
@@ -313,12 +392,14 @@ void update() {
         if(cameraMode==2)if(auto third=thirdPerson()){third->freeRotationEnabled=true;third->freeRotation={float(std::numbers::pi),0};}
         combat.advance(dt);
     }
-    updatePlayerModel(enabled&&world,movement.state.mode,movement.state.velocity,paused?0:dt);
+    updatePlayerModel(controlState==ControlMode::Gameplay||controlState==ControlMode::Paused,movement.state.mode,movement.state.velocity,paused?0:dt);
+    static auto previousControlState=ControlMode::Unavailable;
+    if(previousControlState!=controlState){spdlog::info("Control context {} -> {}",int(previousControlState),int(controlState));previousControlState=controlState;}
     static auto lastTelemetry=Clock::now();
     if(debug&&world&&now-lastTelemetry>std::chrono::seconds(1)) {
         auto pos=player->GetPosition();RE::hkVector4 measured{};if(controller)controller->GetLinearVelocityImpl(measured);
         auto v=unpack(measured);
-        spdlog::info("Live active={} mode={} xyz=({:.1f},{:.1f},{:.1f}) measured=({:.2f},{:.2f},{:.2f}) physicsCalls={} workbench={}",active,int(movement.state.mode),pos.x,pos.y,pos.z,v.x,v.y,v.z,physicsCalls.load(),workbench);
+        spdlog::info("Live active={} mode={} xyz=({:.1f},{:.1f},{:.1f}) measured=({:.2f},{:.2f},{:.2f}) physicsCalls={} workbench={} controlContext={}",active,int(movement.state.mode),pos.x,pos.y,pos.z,v.x,v.y,v.z,physicsCalls.load(),workbench,int(controlState));
 #ifdef VOXEL_PLAYTEST
         RE::Actor* nearest{};float nearestDistance=10000;
         RE::ProcessLists::GetSingleton()->ForEachHighActor([&](RE::Actor* actor){
@@ -333,6 +414,7 @@ void update() {
     }
     Snapshot next;
     next.enabled=enabled;next.active=active;next.debug=debug;next.workbench=workbench;next.creativeArmed=creativeArmed;
+    next.controlState=controlState;
     next.mode=movement.state.mode;next.velocity=movement.state.velocity;next.camera=cameraMode;next.status=status;next.selectedSpell=selectedSpell;next.attackCharge=float(combat.charge());
     if(world) {
         auto pos=player->GetPosition();next.position={pos.x,pos.y,pos.z};
@@ -377,7 +459,7 @@ public:
                     case 0x39:
                         if(creativeArmed) {
                             auto now=Clock::now();
-                            if(now-lastJump<std::chrono::milliseconds(280))movement.setMode(movement.state.mode==Mode::Creative?Mode::Survival:Mode::Creative);
+                            if(now-lastJump<std::chrono::milliseconds(280))enqueue(Action::ToggleHover);
                             lastJump=now;
                         }break;
                     default:break;
@@ -396,32 +478,42 @@ public:
     RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* event,RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override {
         if(!event||!event->opening||!enabled)return RE::BSEventNotifyControl::kContinue;
         if(event->menuName==RE::CraftingMenu::MENU_NAME) {
-          const auto inheritedControls=ownedFlags;
-          SKSE::GetTaskInterface()->AddTask([inheritedControls]{
+          SKSE::GetTaskInterface()->AddTask([]{
             auto menu=RE::UI::GetSingleton()->GetMenu<RE::CraftingMenu>();
-            if(menu&&skyrim_cast<RE::CraftingSubMenus::CraftingSubMenus::AlchemyMenu*>(menu->GetCraftingSubMenu())) {
+            if(menu&&allowsWorkbenchMenu(readControlContext(true))&&skyrim_cast<RE::CraftingSubMenus::CraftingSubMenus::AlchemyMenu*>(menu->GetCraftingSubMenu())) {
                 RE::CraftingMenu::QuitMenu();
                 RE::PlayerCharacter::GetSingleton()->StopInteractingQuick(false);
-                pendingRestoreFlags|=inheritedControls;
                 requestWorkbench=true;spdlog::info("Alchemy station handed off to workbench");
             }
           });
         }
         if(event->menuName==RE::MagicMenu::MENU_NAME)SKSE::GetTaskInterface()->AddTask([]{
+            if(!allowsWorkbenchMenu(readControlContext()))return;
             RE::UIMessageQueue::GetSingleton()->AddMessage(RE::MagicMenu::MENU_NAME,RE::UI_MESSAGE_TYPE::kHide,nullptr);
             requestWorkbench=true;
         });
         return RE::BSEventNotifyControl::kContinue;
     }
 } menuSink;
+class ControlSink final:public RE::BSTEventSink<RE::UserEventEnabled> {
+    RE::BSEventNotifyControl ProcessEvent(const RE::UserEventEnabled* event,RE::BSTEventSource<RE::UserEventEnabled>*) override {
+        if(event&&!event->newUserEventFlag.all(Flag::kMovement,Flag::kLooking,Flag::kPOVSwitch)) {
+            suppressedNative=0;
+            std::lock_guard lock(physicsMutex);physicsPlayer=nullptr;
+        }
+        return RE::BSEventNotifyControl::kContinue;
+    }
+} controlSink;
 }
 Snapshot readSnapshot(){std::lock_guard lock(sharedMutex);return snapshot;}
 void enqueue(Action action,int value){std::lock_guard lock(sharedMutex);commands.push_back({action,value});}
 PointerInput takePointerInput(){std::lock_guard lock(sharedMutex);auto result=pointer;pointer.dx=pointer.dy=pointer.wheel=0;return result;}
 void queueFrame(){if(!frameQueued.exchange(true))SKSE::GetTaskInterface()->AddTask(update);}
-void resetRuntime(){restoreCamera();resetPlayerModel();releasePhysics(RE::PlayerCharacter::GetSingleton());keys.fill(false);workbench=false;requestWorkbench=false;pendingRestoreFlags=0;creativeArmed=false;cameraMode=0;combat.elapsed=10;lastFrame=Clock::now();}
+void resetRuntime(){restoreCamera();resetPlayerModel();releasePhysics(RE::PlayerCharacter::GetSingleton());keys.fill(false);workbench=false;requestWorkbench=false;creativeArmed=false;cameraMode=0;combat.elapsed=10;lastFrame=Clock::now();}
 void startRuntime(){
     installPhysics();
+    installInputFilters();
+    RE::ControlMap::GetSingleton()->AddEventSink(&controlSink);
     RE::BSInputDeviceManager::GetSingleton()->AddEventSink(&inputSink);
     RE::UI::GetSingleton()->AddEventSink<RE::MenuOpenCloseEvent>(&menuSink);
     reserveKeys(true);spdlog::info("Input and menu adapters installed");

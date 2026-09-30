@@ -1,5 +1,6 @@
 #pragma once
 #include "voxel/core.hpp"
+#include "voxel/control_policy.hpp"
 #include <array>
 #include <atomic>
 #include <mutex>
@@ -9,6 +10,7 @@ struct RecipeView { bool available{},learned{}; std::vector<int> counts; };
 struct Snapshot {
     bool enabled=true, active{}, debug{}, workbench{}, creativeArmed{}, melee=true;
     Mode mode=Mode::Survival;
+    ControlMode controlState=ControlMode::Unavailable;
     Vec3 position{},velocity{};
     float health{},magicka{},stamina{},attackCharge=1;
     int camera{},selectedSpell{};
@@ -16,7 +18,6 @@ struct Snapshot {
     std::array<bool,3> spells{};
     std::vector<RecipeView> recipes;
 };
-enum class Action { ToggleEnabled,ToggleDebug,Camera,Creative,Glide,Workbench,CloseWorkbench,Craft,SelectSpell,Attack,Cast };
 struct Command {Action action;int value{};};
 struct PointerInput {float dx{},dy{},wheel{};std::array<bool,3> buttons{};};
 Snapshot readSnapshot();

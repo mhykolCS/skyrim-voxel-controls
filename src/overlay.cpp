@@ -98,6 +98,7 @@ void draw(const Snapshot& state) {
         ImGui::Text("XYZ: %.2f / %.2f / %.2f (Skyrim units)",state.position.x,state.position.y,state.position.z);
         ImGui::Text("Velocity: %.2f / %.2f / %.2f m/s",state.velocity.x,state.velocity.y,state.velocity.z);
         ImGui::Text("Speed %.2f m/s   Camera %d   Controller %s",state.velocity.length(),state.camera,state.active?"active":"suspended");
+        if(state.controlState==ControlMode::Scripted)ImGui::Text("Skyrim owns control: scripted scene or restricted input");
         ImGui::Text("Cell: %s",state.location.c_str());
         ImGui::Text("Health %.0f   Magicka %.0f   Stamina %.0f",state.health,state.magicka,state.stamina);
         if(!state.target.empty())ImGui::Text("Target: %s",state.target.c_str());
@@ -115,7 +116,7 @@ void draw(const Snapshot& state) {
         ImGui::ProgressBar(state.attackCharge,{320,5},"");
         ImGui::End();
     }
-    if(!state.active&&!state.debug){
+    if(!state.active&&!state.debug&&state.controlState!=ControlMode::Scripted){
         ImGui::SetNextWindowPos({22,display.y-48},ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(.7f);
         ImGui::Begin("Voxel ready",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoInputs|ImGuiWindowFlags_NoSavedSettings);
