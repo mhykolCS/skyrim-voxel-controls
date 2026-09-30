@@ -1,0 +1,15 @@
+/build*/
+/deps/
+/tools/vcpkg/
+/tools/xwin*/
+/tools/llvm-mingw*/
+/tools/shader-wine/
+/tools/cache/
+/dist/
+/local/
+*.user
+__pycache__/
+*.pyc
+/voxel-runtime-smoke.log
+/tools/nifly/
+/tools/*.tar.*

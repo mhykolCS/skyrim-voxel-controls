@@ -1,0 +1,31 @@
+{
+  "CommonLibSSE-NG": {
+    "url": "https://github.com/alandtse/CommonLibSSE-NG.git",
+    "commit": "d61bca4de789428aa7d98a770b1323ddf1bb855c",
+    "version": "10.0.0"
+  },
+  "imgui": {
+    "url": "https://github.com/ocornut/imgui.git",
+    "commit": "bf75bfec48fc00f532af8926130b70c0e26eb099",
+    "version": "1.92.3"
+  },
+  "vcpkg": {
+    "url": "https://github.com/microsoft/vcpkg.git",
+    "commit": "b3ae22aef2b857af6e80d756c13f15db12be4e8a",
+    "baseline": "ee12231b20c95013c6638d845d04c91559a1d1ff"
+  },
+  "xwin": {
+    "url": "https://github.com/Jake-Shadle/xwin",
+    "version": "0.10.0"
+  },
+  "llvm-mingw": {
+    "url": "https://github.com/mstorsjo/llvm-mingw",
+    "version": "20260826",
+    "variant": "ucrt-ubuntu-22.04-x86_64"
+  },
+  "nifly": {
+    "url": "https://github.com/ousnius/nifly.git",
+    "commit": "cca0a770094bb962fb28ea1fec5ea903e68fda8e",
+    "purpose": "optional native player-model generator"
+  }
+}
