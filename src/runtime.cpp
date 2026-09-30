@@ -41,7 +41,8 @@ bool cameraOwned=false;
 float savedZoom{};
 RE::NiPoint3 savedCameraOffset{};
 std::string status="VoxelControls ready";
-std::vector<std::pair<RE::BSFixedString,std::uint16_t>> savedMappings;
+struct SavedMapping {RE::BSFixedString event;std::uint16_t previous{},assigned{};};
+std::vector<SavedMapping> savedMappings;
 std::mutex physicsMutex;
 RE::bhkCharacterController* physicsPlayer{};
 RE::hkVector4 desiredVelocity{};
@@ -85,7 +86,7 @@ ControlContext readControlContext(bool alchemyTransition=false) {
 
 bool inventoryChord(const RE::ButtonEvent* button) {
     if(!button||button->device!=RE::INPUT_DEVICE::kKeyboard||button->GetIDCode()!=0x12)return false;
-    return keys[0x2A]||keys[0x36]||(GetAsyncKeyState(VK_SHIFT)&0x8000);
+    return enabled;
 }
 
 template<class Handler,std::uint32_t Mask,std::size_t Table=0>
@@ -94,7 +95,7 @@ struct NativeInputFilter {
     static inline CanProcess original{};
     static bool canProcess(RE::PlayerInputHandler* handler,RE::InputEvent* event) {
         const auto button=event?event->AsButtonEvent():nullptr;
-        if(!(button&&button->IsUp())&&(inventoryIsOpen()||
+        if(!(button&&button->IsUp())&&(inventoryIsOpen()||nativeMenuCapturesInput()||
             (Mask==std::uint32_t(Flag::kActivate)&&inventoryChord(button)&&allowsAction(readControlContext(),Action::Inventory))))return false;
         if((suppressedNative.load()&Mask)&&controlMode(readControlContext())==ControlMode::Gameplay&&
            !(button&&button->IsUp())) {++filteredInputs;return false;}
@@ -162,13 +163,14 @@ void reserveKeys(bool reserve) {
     if(reserve&&!savedMappings.empty())return;
     for(auto& mapping:mappings) {
         if(reserve) {
-            // F5 is Skyrim's default quicksave. Reserve our keys only in memory.
-            if(mapping.inputKey==0x3F||mapping.inputKey==0x40||mapping.inputKey==0x41||mapping.inputKey==0x42||
-               (mapping.inputKey>=2&&mapping.inputKey<=4)) {
-                savedMappings.emplace_back(mapping.eventID,mapping.inputKey);mapping.inputKey=0xFF;
-            }
+            std::uint16_t assigned=mapping.inputKey;
+            if(mapping.eventID==RE::UserEvents::GetSingleton()->activate)assigned=0x21; // F, including the HUD prompt
+            else if(mapping.inputKey==0x12||mapping.inputKey==0x21||
+                mapping.inputKey==0x3F||mapping.inputKey==0x40||mapping.inputKey==0x41||mapping.inputKey==0x42||
+                (mapping.inputKey>=2&&mapping.inputKey<=4))assigned=0xFF;
+            if(assigned!=mapping.inputKey){savedMappings.push_back({mapping.eventID,mapping.inputKey,assigned});mapping.inputKey=assigned;}
         } else {
-            for(auto& [event,key]:savedMappings) if(mapping.eventID==event&&mapping.inputKey==0xFF) mapping.inputKey=key;
+            for(const auto& saved:savedMappings)if(mapping.eventID==saved.event&&mapping.inputKey==saved.assigned)mapping.inputKey=saved.previous;
         }
     }
     if(!reserve)savedMappings.clear();
@@ -284,11 +286,16 @@ void cast(RE::PlayerCharacter* player) {
 #ifdef VOXEL_PLAYTEST
 void playtestButton(unsigned key,float value,float held) {
     auto map=RE::ControlMap::GetSingleton();
-    auto button=RE::ButtonEvent::Create(RE::INPUT_DEVICE::kKeyboard,
-        map->GetUserEventName(key,RE::INPUT_DEVICE::kKeyboard),key,value,held);
+    std::string_view name;
+    const auto& contexts=map->GetRuntimeData().contextPriorityStack;
+    for(auto i=contexts.size();i>0;--i){name=map->GetUserEventName(key,RE::INPUT_DEVICE::kKeyboard,contexts[i-1]);if(!name.empty())break;}
+    auto button=RE::ButtonEvent::Create(RE::INPUT_DEVICE::kKeyboard,name,key,value,held);
     if(button){RE::InputEvent* event=button;RE::BSInputDeviceManager::GetSingleton()->SendEvent(&event);delete button;}
 }
 void playtest() {
+    static int mouseButton=-1;static auto mouseRelease=Clock::now();
+    auto mouseEvent=[](int button,bool down){auto event=RE::ButtonEvent::Create(RE::INPUT_DEVICE::kMouse,"",button,down?1.f:0.f,down?0.f:.2f);if(event){RE::InputEvent* input=event;RE::BSInputDeviceManager::GetSingleton()->SendEvent(&input);delete event;}};
+    if(mouseButton>=0&&Clock::now()>=mouseRelease){mouseEvent(mouseButton,false);mouseButton=-1;}
     static auto lastPoll=Clock::now();static unsigned heldKey=0;static auto releaseKey=Clock::now();
     static std::array<bool,256> nativeKeys{};
     static std::array<Clock::time_point,256> nativeStart{},nativeEnd{};
@@ -312,7 +319,37 @@ void playtest() {
     auto player=RE::PlayerCharacter::GetSingleton();
     static RE::NiPointer<RE::Actor> target;
     spdlog::info("PLAYTEST {}",line);
-    if(op=="console") {
+    if(op=="cursor") {float x{},y{};input>>x>>y;std::lock_guard lock(sharedMutex);pointer.positionSet=true;pointer.x=x;pointer.y=y;}
+    else if(op=="click") {input>>mouseButton;mouseButton=std::clamp(mouseButton,0,2);mouseEvent(mouseButton,true);mouseRelease=Clock::now()+std::chrono::milliseconds(180);}
+    else if(op=="text") {std::string value;std::getline(input>>std::ws,value);std::lock_guard lock(sharedMutex);for(unsigned char c:value)pointer.characters.push_back(c);}
+    else if(op=="ui") {
+        auto state=readSnapshot();spdlog::info("UI open={} paused={} ownsPause={} items={} weight={} capacity={} gold={}",state.inventoryOpen,RE::UI::GetSingleton()->GameIsPaused(),inventoryOwnsPause(),state.inventory.items.size(),state.inventory.carryWeight,state.inventory.carryLimit,state.inventory.gold);
+        for(const auto& item:state.inventory.items)spdlog::info("UI item {:08X}:{} name='{}' count={} equipped={} quest={}",item.key.form,item.key.instance,item.name,item.count,item.equipped,item.quest);
+        for(int i=0;i<9;++i)if(auto item=findItem(state.inventory,state.inventory.quickSlots[i]))spdlog::info("UI quick {} '{}'",i,item->name);
+        const auto& menu=state.nativeMenu;spdlog::info("NATIVE kind={} session={} title='{}' items={} choices={} ready={} exit={} subtitle='{}' gold={} merchantGold={} message='{}'",int(menu.kind),menu.session,menu.title,menu.items.size(),menu.topics.size(),menu.choicesReady,menu.canExit,menu.subtitle,menu.gold,menu.merchantGold,menu.message);
+        for(const auto& item:menu.items)spdlog::info("NATIVE item {:08X}:{} name='{}' count={} player={} enabled={} price={}",item.item.key.form,item.item.key.instance,item.item.name,item.item.count,item.player,item.enabled,item.price);
+        for(const auto& topic:menu.topics)spdlog::info("NATIVE topic {} '{}' fresh={}",topic.index,topic.text,topic.fresh);
+        auto map=RE::ControlMap::GetSingleton();spdlog::info("BINDING Activate={:X} POV={:X}",map->GetMappedKey(RE::UserEvents::GetSingleton()->activate,RE::INPUT_DEVICE::kKeyboard),map->GetMappedKey(RE::UserEvents::GetSingleton()->togglePOV,RE::INPUT_DEVICE::kKeyboard));
+    }
+    else if(op=="movie") {
+        std::string spec;std::getline(input>>std::ws,spec);auto divider=spec.find('|');
+        if(divider!=std::string::npos)if(auto menu=RE::UI::GetSingleton()->GetMenu(spec.substr(0,divider))){
+            RE::GFxValue object;if(menu->uiMovie&&menu->uiMovie->GetVariable(&object,spec.substr(divider+1).c_str())&&object.IsObject())object.VisitMembers([](const char* name,const RE::GFxValue& value){
+                if(value.IsString())spdlog::info("MOVIE {}='{}'",name,value.GetString());else if(value.IsNumber())spdlog::info("MOVIE {}={}",name,value.GetNumber());else if(value.IsBool())spdlog::info("MOVIE {}={}",name,value.GetBool());else if(value.IsArray())spdlog::info("MOVIE {} array {}",name,value.GetArraySize());else spdlog::info("MOVIE {} object={}",name,value.IsObject());
+            });
+            struct CallbackDump:RE::FxDelegateHandler::CallbackProcessor {void Process(const RE::GString& name,RE::FxDelegateHandler::CallbackFn*) override{spdlog::info("CALLBACK {}",name.c_str());}} callbacks;
+            menu->Accept(&callbacks);
+        }
+    }
+    else if(op=="close") {std::string name;std::getline(input>>std::ws,name);RE::UIMessageQueue::GetSingleton()->AddMessage(name,RE::UI_MESSAGE_TYPE::kHide,nullptr);}
+    else if(op=="lookat") {unsigned form{};input>>std::hex>>form;if(auto ref=RE::TESForm::LookupByID<RE::TESObjectREFR>(form)){
+        auto pos=ref->GetPosition();player->SetPosition({pos.x,pos.y-160,pos.z},true);player->SetAngle({0.f,0.f,0.f});
+    }}
+    else if(op=="open") {std::string name;std::getline(input>>std::ws,name);RE::UIMessageQueue::GetSingleton()->AddMessage(name,RE::UI_MESSAGE_TYPE::kShow,nullptr);}
+    else if(op=="activate") {unsigned form{};input>>std::hex>>form;if(auto ref=RE::TESForm::LookupByID<RE::TESObjectREFR>(form))ref->ActivateRef(player,0,nullptr,1,false);}
+    else if(op=="container") {unsigned form{};input>>std::hex>>form;if(auto ref=RE::TESForm::LookupByID<RE::TESObjectREFR>(form))RE::ContainerMenu::OpenMenu(ref,RE::ContainerMenu::ContainerMode::kLoot);}
+    else if(op=="barter") {unsigned form{};input>>std::hex>>form;if(auto actor=RE::TESForm::LookupByID<RE::Actor>(form))RE::BarterMenu::OpenMenu(actor);}
+    else if(op=="console") {
         std::string command;std::getline(input>>std::ws,command);
         auto factory=RE::IFormFactory::GetConcreteFormFactoryByType<RE::Script>();
         if(factory)if(auto script=factory->Create()){script->SetCommand(command);script->CompileAndRun(player);delete script;}
@@ -388,7 +425,7 @@ void update() {
             continue;
         }
         switch(command.action) {
-            case Action::Inventory:workbench=false;keys.fill(false);flightTap.reset();setInventoryOpen(true);break;
+            case Action::Inventory:workbench=false;keys.fill(false);flightTap.reset();status="Inventory: select an item, or choose a recipe to craft";setInventoryOpen(true);break;
             case Action::UseItem:case Action::DropItem:case Action::PinItem:case Action::NativeInventory:{auto message=inventoryCommand(command);if(!message.empty())notify(message);break;}
             case Action::Camera:setCamera((cameraMode+1)%3);break;
             case Action::Creative:
@@ -408,7 +445,7 @@ void update() {
     if(controlState!=ControlMode::Gameplay)setInventoryOpen(false);
     bool active=controlState==ControlMode::Gameplay&&controller&&!inventoryIsOpen();
     if(!active) {
-        releasePhysics(player,controlState==ControlMode::Paused||inventoryIsOpen());workbench=false;keys.fill(false);flightTap.reset();
+        releasePhysics(player,controlState==ControlMode::Paused||inventoryIsOpen());workbench=false;if(!inventoryIsOpen())keys.fill(false);flightTap.reset();
         if(controlState!=ControlMode::Paused&&!inventoryIsOpen()){restoreCamera();restoreFlightFov();requestWorkbench=false;}
     }
     else {
@@ -504,6 +541,7 @@ void update() {
             if(inventoryIsOpen())updateInventoryView(next);
         }
     }
+    updateNativeMenus(next);
     {std::lock_guard lock(sharedMutex);snapshot=std::move(next);}
 }
 class InputSink final:public RE::BSTEventSink<RE::InputEvent*> {
@@ -511,7 +549,7 @@ public:
     RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* events,RE::BSTEventSource<RE::InputEvent*>*) override {
         if(!events)return RE::BSEventNotifyControl::kContinue;
         for(auto event=*events;event;event=event->next) {
-            if(inventoryIsOpen())if(auto character=event->AsCharEvent()){std::lock_guard lock(sharedMutex);pointer.characters.push_back(character->keyCode);}
+            if(inventoryIsOpen()||nativeMenuCapturesInput())if(auto character=event->AsCharEvent()){std::lock_guard lock(sharedMutex);pointer.characters.push_back(character->keyCode);}
             if(event->eventType==RE::INPUT_EVENT_TYPE::kMouseMove) {
                 auto mouse=static_cast<RE::MouseMoveEvent*>(event);std::lock_guard lock(sharedMutex);pointer.dx+=mouse->mouseInputX;pointer.dy+=mouse->mouseInputY;
             }
@@ -519,10 +557,11 @@ public:
             auto key=button->GetIDCode();bool down=button->IsDown();
             if(button->device==RE::INPUT_DEVICE::kKeyboard) {
                 if(key<keys.size())keys[key]=button->IsPressed();
-                if(inventoryIsOpen()){
+                if(inventoryIsOpen()||nativeMenuCapturesInput()){
                     {std::lock_guard lock(sharedMutex);pointer.keyboard.emplace_back(key,button->IsPressed());}
-                    if(down&&(key==0x01||inventoryChord(button)))enqueue(Action::CloseInventory);
-                    else if(down&&key==0x44)enqueue(Action::ToggleEnabled);
+                    if(down&&key==0x44)enqueue(Action::ToggleEnabled);
+                    else if(nativeMenuCapturesInput()){if(down&&(!menuTextFocused()||key==0x01||key==0x0F))nativeMenuKey(key);}
+                    else if(down&&(key==0x01||key==0x0F||(inventoryChord(button)&&!menuTextFocused())))enqueue(Action::CloseInventory);
                     continue;
                 }
                 if(!down)continue;
@@ -544,7 +583,7 @@ public:
                 }
             } else if(button->device==RE::INPUT_DEVICE::kMouse) {
                 {std::lock_guard lock(sharedMutex);if(key<3)pointer.buttons[key]=button->IsPressed();if(down&&key==8)pointer.wheel+=1;if(down&&key==9)pointer.wheel-=1;}
-                if(!inventoryIsOpen()){
+                if(!inventoryIsOpen()&&!nativeMenuCapturesInput()){
                     if(down&&key==0)enqueue(Action::Attack);
                     if(down&&key==1)enqueue(Action::Cast);
                 }
@@ -587,11 +626,16 @@ class ControlSink final:public RE::BSTEventSink<RE::UserEventEnabled> {
 }
 Snapshot readSnapshot(){std::lock_guard lock(sharedMutex);return snapshot;}
 void enqueue(Action action,int value,ItemKey item){std::lock_guard lock(sharedMutex);commands.push_back({action,value,item});}
-PointerInput takePointerInput(){std::lock_guard lock(sharedMutex);auto result=pointer;pointer.dx=pointer.dy=pointer.wheel=0;pointer.keyboard.clear();pointer.characters.clear();return result;}
+PointerInput takePointerInput(){std::lock_guard lock(sharedMutex);auto result=pointer;pointer.dx=pointer.dy=pointer.wheel=0;pointer.keyboard.clear();pointer.characters.clear();
+#ifdef VOXEL_PLAYTEST
+pointer.positionSet=false;
+#endif
+return result;}
 void queueFrame(){if(!frameQueued.exchange(true))SKSE::GetTaskInterface()->AddTask(update);}
-void resetRuntime(){resetInventory();restoreCamera();restoreFlightFov();resetPlayerModel();releasePhysics(RE::PlayerCharacter::GetSingleton());keys.fill(false);workbench=false;requestWorkbench=false;flightTap.reset();cameraMode=0;combat.elapsed=10;lastFrame=Clock::now();}
+void resetRuntime(){resetNativeMenus();resetInventory();restoreCamera();restoreFlightFov();resetPlayerModel();releasePhysics(RE::PlayerCharacter::GetSingleton());keys.fill(false);workbench=false;requestWorkbench=false;flightTap.reset();cameraMode=0;combat.elapsed=10;lastFrame=Clock::now();}
 void startRuntime(){
     initInventory();
+    initNativeMenus();
     installPhysics();
     installInputFilters();
     RE::ControlMap::GetSingleton()->AddEventSink(&controlSink);

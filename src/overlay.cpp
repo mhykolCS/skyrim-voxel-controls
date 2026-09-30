@@ -118,7 +118,7 @@ void draw(const Snapshot& state) {
         ImGui::ProgressBar(state.attackCharge,{320,5},"");
         ImGui::End();
     }
-    if(!state.active&&!state.debug&&state.controlState!=ControlMode::Scripted){
+    if(!state.active&&!state.debug&&!state.inventoryOpen&&state.nativeMenu.kind==MenuKind::None&&state.controlState!=ControlMode::Scripted){
         ImGui::SetNextWindowPos({22,display.y-48},ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(.7f);
         ImGui::Begin("Voxel ready",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoInputs|ImGuiWindowFlags_NoSavedSettings);
@@ -126,6 +126,7 @@ void draw(const Snapshot& state) {
     }
     if(state.workbench)drawWorkbench(state);
     drawInventory(state,device);
+    drawNativeMenus(state);
 }
 HRESULT STDMETHODCALLTYPE present(IDXGISwapChain* swap,UINT interval,UINT flags) {
     if(swap!=gameSwapChain)return originalPresent(swap,interval,flags);
@@ -148,24 +149,27 @@ HRESULT STDMETHODCALLTYPE present(IDXGISwapChain* swap,UINT interval,UINT flags)
             auto& io=ImGui::GetIO();io.DisplaySize={float(description.Width),float(description.Height)};
             auto now=std::chrono::steady_clock::now();io.DeltaTime=std::clamp(std::chrono::duration<float>(now-previousPresent).count(),.001f,.2f);previousPresent=now;
             cursorX=std::clamp(cursorX+input.dx,0.f,io.DisplaySize.x);cursorY=std::clamp(cursorY+input.dy,0.f,io.DisplaySize.y);
+#ifdef VOXEL_PLAYTEST
+            if(input.positionSet){cursorX=input.x;cursorY=input.y;}
+#endif
             static bool wasWorkbench=false;
-            const bool panelOpen=state.workbench||state.inventoryOpen;
+            const bool panelOpen=state.workbench||state.inventoryOpen||state.nativeMenu.kind!=MenuKind::None;
             if(panelOpen!=wasWorkbench){io.ClearInputKeys();if(panelOpen){cursorX=io.DisplaySize.x/2;cursorY=io.DisplaySize.y/2;}}
             wasWorkbench=panelOpen;io.MouseDrawCursor=panelOpen;
             io.AddMousePosEvent(cursorX,cursorY);
             for(int i=0;i<3;++i)io.AddMouseButtonEvent(i,panelOpen&&input.buttons[i]);
             io.AddMouseWheelEvent(0,panelOpen?input.wheel:0);
-            if(state.inventoryOpen){
+            if(state.inventoryOpen||state.nativeMenu.kind!=MenuKind::None){
                 for(auto c:input.characters)if(c>=32)io.AddInputCharacter(c);
                 for(auto [key,pressed]:input.keyboard){
                     ImGuiKey mapped=ImGuiKey_None;
-                    switch(key){case 0x0E:mapped=ImGuiKey_Backspace;break;case 0x0F:mapped=ImGuiKey_Tab;break;case 0x1C:mapped=ImGuiKey_Enter;break;
+                    switch(key){case 0x01:mapped=ImGuiKey_Escape;break;case 0x0E:mapped=ImGuiKey_Backspace;break;case 0x0F:mapped=ImGuiKey_Tab;break;case 0x1C:mapped=ImGuiKey_Enter;break;
                     case 0xCB:mapped=ImGuiKey_LeftArrow;break;case 0xCD:mapped=ImGuiKey_RightArrow;break;case 0xC7:mapped=ImGuiKey_Home;break;case 0xCF:mapped=ImGuiKey_End;break;case 0xD3:mapped=ImGuiKey_Delete;break;
                     case 0x1D:case 0x9D:mapped=ImGuiMod_Ctrl;break;case 0x2A:case 0x36:mapped=ImGuiMod_Shift;break;case 0x1E:mapped=ImGuiKey_A;break;case 0x13:mapped=ImGuiKey_R;break;default:break;}
                     if(mapped!=ImGuiKey_None)io.AddKeyEvent(mapped,pressed);
                 }
             }
-            ImGui_ImplDX11_NewFrame();ImGui::NewFrame();draw(state);ImGui::Render();
+            ImGui_ImplDX11_NewFrame();ImGui::NewFrame();draw(state);ImGui::Render();setMenuTextFocused(panelOpen&&io.WantTextInput);
             ID3D11RenderTargetView* oldViews[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]{};ID3D11DepthStencilView* oldDepth{};
             context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT,oldViews,&oldDepth);context->OMSetRenderTargets(1,&view,nullptr);
             ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT,oldViews,oldDepth);
@@ -176,7 +180,8 @@ HRESULT STDMETHODCALLTYPE present(IDXGISwapChain* swap,UINT interval,UINT flags)
     if(captureRequested.exchange(false)) {
         ID3D11Texture2D* capture{};
         if(SUCCEEDED(swap->GetBuffer(0,__uuidof(ID3D11Texture2D),reinterpret_cast<void**>(&capture)))) {
-            auto result=DirectX::SaveDDSTextureToFile(context,capture,L"Data/SKSE/Plugins/VoxelControls.capture.dds");
+            auto result=DirectX::SaveDDSTextureToFile(context,capture,L"Data/SKSE/Plugins/VoxelControls.capture.tmp.dds");
+            if(SUCCEEDED(result))MoveFileExW(L"Data/SKSE/Plugins/VoxelControls.capture.tmp.dds",L"Data/SKSE/Plugins/VoxelControls.capture.dds",MOVEFILE_REPLACE_EXISTING);
             spdlog::info("PLAYTEST capture result {}",result);capture->Release();
         }
     }

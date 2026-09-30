@@ -33,7 +33,7 @@ std::string effectsOf(RE::MagicItem* magic) {
 ItemView describe(RE::PlayerCharacter* player,RE::TESBoundObject* object,RE::ExtraDataList* extra,int count) {
     RE::InventoryEntryData entry(object,count);if(extra)entry.AddExtraList(extra);
     ItemView item;item.key={object->GetFormID(),reinterpret_cast<std::uint64_t>(extra)};
-    item.name=entry.GetDisplayName();item.count=count;item.weight=entry.GetWeight();item.value=entry.GetValue();
+    item.name=entry.GetDisplayName();item.count=count;item.weight=std::max(0.f,entry.GetWeight());item.value=entry.GetValue();
     item.equipped=entry.IsWorn();item.quest=entry.IsQuestObject();item.enchanted=entry.IsEnchanted();
     item.droppable=!item.quest;item.source=object->GetFile(0)?std::string(object->GetFile(0)->GetFilename()):"Skyrim";
     if(auto weapon=object->As<RE::TESObjectWEAP>()) {
@@ -94,7 +94,8 @@ void refresh() {
     InventoryView view;view.playerName=player->GetName();view.level=player->GetLevel();
     if(auto race=player->GetRace())view.raceName=race->GetName();
     auto av=player->AsActorValueOwner();
-    view.carryWeight=player->GetTotalCarryWeight();view.carryLimit=av->GetActorValue(RE::ActorValue::kCarryWeight);
+    if(auto changes=player->GetInventoryChanges())view.carryWeight=changes->GetInventoryWeight();
+    view.carryLimit=av->GetActorValue(RE::ActorValue::kCarryWeight);
     view.armor=av->GetActorValue(RE::ActorValue::kDamageResist);view.damage=player->GetEquippedWeaponsDamage();
     view.maxHealth=av->GetPermanentActorValue(RE::ActorValue::kHealth);view.maxMagicka=av->GetPermanentActorValue(RE::ActorValue::kMagicka);view.maxStamina=av->GetPermanentActorValue(RE::ActorValue::kStamina);
     for(auto& [object,data]:player->GetInventory()) {
@@ -144,6 +145,7 @@ void loadBindings(SKSE::SerializationInterface* serial) {
     refreshed={};
 }
 }
+ItemView describeInventoryItem(RE::TESBoundObject* object,RE::ExtraDataList* extra,int count){return describe(RE::PlayerCharacter::GetSingleton(),object,extra,count);}
 bool inventoryIsOpen(){return requested;}
 bool inventoryOwnsPause() {
     const auto ui=RE::UI::GetSingleton();return requested&&ui&&ui->IsMenuOpen(menuName)&&ui->numPausesGame==1;
@@ -161,7 +163,7 @@ void updateInventoryView(Snapshot& snapshot) {
     snapshot.inventory=cached;
     auto player=RE::PlayerCharacter::GetSingleton();
     for(const auto& recipe:recipes()) {
-        if(auto object=RE::TESForm::LookupByID<RE::TESBoundObject>(recipe.output))snapshot.recipeItems.push_back(describe(player,object,nullptr,0));
+        if(auto object=RE::TESForm::LookupByID<RE::TESBoundObject>(recipe.output)){auto item=describe(player,object,nullptr,0);if(recipe.spell)item.icon=ItemIcon::Scroll;snapshot.recipeItems.push_back(std::move(item));}
         else {ItemView item;item.key.form=recipe.output;item.name=recipe.name;item.icon=ItemIcon::Scroll;snapshot.recipeItems.push_back(std::move(item));}
         for(const auto& ingredient:recipe.inputs)if(auto object=RE::TESForm::LookupByID<RE::TESBoundObject>(ingredient.form))snapshot.recipeItems.push_back(describe(player,object,nullptr,0));
     }

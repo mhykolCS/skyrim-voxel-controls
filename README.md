@@ -3,6 +3,7 @@
 [![Native core](https://github.com/mhykolCS/skyrim-voxel-controls/actions/workflows/core.yml/badge.svg)](https://github.com/mhykolCS/skyrim-voxel-controls/actions/workflows/core.yml)
 
 A native Skyrim mod exploring Minecraft-inspired movement, flight, melee combat,
+a Minecraft-style inventory, themed containers, trading and dialogue,
 and a tech-mod-style alchemy and spell workbench. It uses Skyrim's world,
 collision system, actors, spells, and inventory. Minecraft does not need to run.
 There is no block placement or terrain destruction.
@@ -28,6 +29,9 @@ separate checks. See [validation](docs/VALIDATION.md) for the current evidence.
 | Space | Jump; ascend in creative flight |
 | Shift | Move slowly; descend in creative flight |
 | Ctrl | Sprint; 2× horizontal creative flight with wider FOV; glide boost uses magicka |
+| E | Open or close the Minecraft inventory; types normally in search fields |
+| F | Interact with Skyrim objects and characters; also shown in the interaction prompt |
+| Tab | Open the themed adventure menu; close an open inventory or conversation |
 | F3 | Debug overlay: position, velocity, frame rate, controller state |
 | F5 | First person, rear third person, front third person |
 | F6 | Enter or leave creative flight |
@@ -39,8 +43,9 @@ separate checks. See [validation](docs/VALIDATION.md) for the current evidence.
 | 1 / 2 / 3 | Select Firebolt / Ice Spike / Lightning matrix |
 | Right mouse | Cast the selected learned matrix while in melee mode |
 
-F5 through F8 and the three matrix number keys are reserved in the in-memory gameplay
+E, F, F5 through F8 and the three matrix number keys are reserved in the in-memory gameplay
 mapping while the mod is enabled. The user's control configuration is not edited.
+Activate is mapped to F and the former F camera shortcut is reserved for F5.
 F10 restores those bindings. Ranged weapons and equipped native spells retain
 their native attack inputs. Alchemy stations and the magic menu open the new
 workbench while enabled; F10 gives access to the original menus.
@@ -94,6 +99,40 @@ again. The recipe identities are verified from the user's local Skyrim.esm using
 | Firebolt matrix | Fire salts + filled petty soul gem | Learn Firebolt |
 | Ice spike matrix | Frost salts + filled petty soul gem | Learn Ice Spike |
 | Lightning matrix | Void salts + filled petty soul gem | Learn Lightning Bolt |
+
+## Inventory and menu screens
+
+E opens the Minecraft-style character inventory with equipment slots, a classic
+Steve preview, a paginated backpack, nine saved quick slots, and a recipe browser.
+Search by name or `@source`, filter by item category, and sort by name, weight or
+value. Tooltips show equipment status, enchantments, quest protection and effects.
+Right-click or double-click an item to use/equip it. Drag items to the quick bar,
+click an empty quick slot to pin the selected item, or middle-click to unpin.
+The quick bar stores references to real items; it does not create another storage
+container. Its bindings are saved in the SKSE cosave.
+
+The same gray beveled panels, pixel icons, item search and contextual details also
+cover native item menus, containers and shops. Container screens show the other
+inventory and your backpack together. Shop screens show merchant stock, your
+items, both gold balances, prices and quantity controls. Trades and theft require
+an explicit confirmation. Native callbacks perform transfers, purchases, sales,
+equipment and drops; the adapter revalidates the menu session and exact current
+item before acting. Quest items remain protected. Native confirmations and
+special submenus temporarily retain Skyrim's own interface.
+
+Dialogue screens show the actual speaker, subtitle and response list. Click a
+response or use its numbered shortcut; Space continues a line when Skyrim permits
+it, and Tab leaves when the conversation allows leaving. The UI retains Skyrim's
+conversation state machine, voice timing and quest responses. Tab's adventure
+menu provides Inventory, Magic, Skills and World Map cards. The world map, perk
+constellations, journal/settings and unsupported third-party menus retain their
+native screens. F10 restores the original menu presentation and input bindings.
+
+The visual direction draws on Minecraft's slot layout and
+[ATM10](https://github.com/AllTheMods/ATM-10)'s contextual machine screens and
+[JEI](https://github.com/mezz/JustEnoughItems)'s item/recipe browsing. This is an
+original UI for Skyrim, with six starter recipes, not the ATM10 modpack or its
+assets. The model's locally generated skin remains separate from the source repo.
 
 ## Classic Steve
 

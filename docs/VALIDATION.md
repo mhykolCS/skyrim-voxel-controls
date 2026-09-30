@@ -145,6 +145,38 @@ All three native test suites pass, including the new camera-only-lock regression
 The profile and 47 original save-directory files were backed up before testing;
 a separate `VoxelControlsBefore013` save preserves the user's current position.
 
+## 0.2.0 inventory and menu adapters
+
+The Windows plugin builds successfully, and all four native suites pass (movement,
+control permissions, inventory identity/search/pagination, and the 900-tick Java
+physics reference). Live checks use a separate temporary Prisoner character and
+an optional virtual X display; the development command driver is excluded from
+release builds.
+
+Verified in the live 1.7.104.0 game so far:
+
+- E opens the paused character inventory. Real OS typing of `healing`, including
+  its E, filters the backpack without closing it. Escape resumes gameplay.
+- Activate maps to scan code `21` (F), and the former POV binding is `FF` while
+  enabled. The native journal/barter tutorials also display F for activation.
+- The inventory consumes a healing potion once, equips/unequips a sword, and
+  drops exactly one lockpick (10 to 9). The portable recipe consumes each input
+  once and produces a real potion. A quick-slot binding survives save/load.
+- The Tab dashboard opens and routes its Inventory card to the themed native
+  item menu. The native equipment callback is being checked separately.
+- The test ingredient container exposes 124 combined item stacks with independent
+  paginated grids. Taking one blue mountain flower changes the player count from
+  1 to 2; storing it returns the player and container counts to 1 each.
+- Lucan's actual dialogue choices populate the response cards. Selecting the
+  sale response opens BarterMenu. Its tutorial temporarily keeps the native
+  screen, then the themed shop displays 90 item stacks, both gold balances,
+  and distinct buy/sell quotes. Confirmed trade checks are still in progress.
+
+Evidence is retained locally in `local/testing/inventory-*.log` and
+`local/testing/screenshots/`; game assets and local screenshots are not part of
+the public source distribution. The 47 original save-directory files still match
+their pre-test SHA-256 manifest.
+
 ## Runtime setup and preservation
 
 The old Proton prefix contained a 2016 Microsoft C++ runtime that failed during

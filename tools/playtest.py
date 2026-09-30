@@ -16,6 +16,8 @@ parser.add_argument('--capture', type=Path, help='Write the game-only DDS captur
 args = parser.parse_args()
 folder = args.game / 'Data/SKSE/Plugins'
 path = folder / 'VoxelControls.playtest.txt'
+capture = folder / 'VoxelControls.capture.dds'
+previous_capture = capture.stat().st_mtime_ns if capture.exists() else None
 if path.exists():
     parser.error('A command is still pending; it was left unchanged')
 staged = path.with_suffix('.tmp')
@@ -27,9 +29,18 @@ while path.exists() and time.monotonic() < deadline:
 if path.exists():
     parser.error('Command was not consumed: the game needs a VOXEL_PLAYTEST build')
 if args.capture:
-    capture = folder / 'VoxelControls.capture.dds'
-    time.sleep(.5)
-    data = capture.read_bytes()
+    deadline = time.monotonic() + 15
+    data = b''
+    while time.monotonic() < deadline:
+        if capture.exists() and capture.stat().st_mtime_ns != previous_capture:
+            data = capture.read_bytes()
+            if len(data) >= 128:
+                height, width = struct.unpack_from('<II', data, 12)
+                if len(data) == 128 + width * height * 4:
+                    break
+        time.sleep(.1)
+    else:
+        parser.error('Timed out waiting for a complete, new game capture')
     height, width = struct.unpack_from('<II', data, 12)
     flags, fourcc, bits, red, green, blue, alpha = struct.unpack_from('<7I', data, 80)
     # ImageMagick's DDS reader ignores these RGBA channel masks. Feed the raw

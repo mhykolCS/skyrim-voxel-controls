@@ -40,6 +40,21 @@ bool button(const char* id,std::string_view label,float x,float y,float w,float 
     text(x+(w-size.x/scale)/2,y+(h-17)/2,label,enabled?ink:dim,17);
     ImGui::PopID();return enabled&&pressed&&ImGui::IsMouseReleased(ImGuiMouseButton_Left);
 }
+bool confirmation(const char* title) {
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x*.5f,ImGui::GetIO().DisplaySize.y*.5f),ImGuiCond_Always,{.5f,.5f});
+    ImGui::SetNextWindowSize({440*scale,0},ImGuiCond_Always);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{18*scale,14*scale});
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,{12*scale,7*scale});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,0);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize,2*scale);
+    ImGui::PushStyleColor(ImGuiCol_PopupBg,{.776f,.776f,.776f,1});
+    ImGui::PushStyleColor(ImGuiCol_TitleBg,{.57f,.57f,.57f,1});ImGui::PushStyleColor(ImGuiCol_TitleBgActive,{.57f,.57f,.57f,1});
+    ImGui::PushStyleColor(ImGuiCol_Text,{.18f,.17f,.16f,1});ImGui::PushStyleColor(ImGuiCol_Border,{.18f,.18f,.18f,1});
+    ImGui::PushStyleColor(ImGuiCol_Button,{.65f,.65f,.65f,1});ImGui::PushStyleColor(ImGuiCol_ButtonHovered,{.84f,.87f,.84f,1});ImGui::PushStyleColor(ImGuiCol_ButtonActive,{.56f,.72f,.6f,1});
+    if(ImGui::BeginPopupModal(title,nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoMove))return true;
+    ImGui::PopStyleColor(8);ImGui::PopStyleVar(4);return false;
+}
+void endConfirmation(){ImGui::EndPopup();ImGui::PopStyleColor(8);ImGui::PopStyleVar(4);}
 void icon(ItemIcon type,float x,float y,float size,ImU32 tint=IM_COL32(180,195,205,255)) {
     const float u=size/24;
     auto p=[&](float a,float b,float w,float h,ImU32 c){box(x+a*u,y+b*u,w*u,h*u,c);};
@@ -88,7 +103,7 @@ void icon(ItemIcon type,float x,float y,float size,ImU32 tint=IM_COL32(180,195,2
         default:p(6,3,12,4,edge);p(8,7,8,3,wood);p(4,10,16,11,edge);p(6,9,12,13,wood);p(7,11,5,8,IM_COL32(175,139,85,255));break;
     }
 }
-void tooltip(const ItemView& item) {
+void tooltip(const ItemView& item,bool inventoryActions=true) {
     ImGui::PushStyleColor(ImGuiCol_PopupBg,{.075f,.025f,.12f,.98f});ImGui::PushStyleColor(ImGuiCol_Border,{.35f,.18f,.65f,1});
     ImGui::BeginTooltip();ImGui::PushTextWrapPos(ImGui::GetFontSize()*25);
     ImGui::TextColored(item.enchanted?ImVec4(.8f,.58f,1,1):ImVec4(1,1,1,1),"%s",item.name.c_str());ImGui::TextColored({.5f,.6f,1,1},"%s",item.source.c_str());
@@ -96,7 +111,7 @@ void tooltip(const ItemView& item) {
     ImGui::Text("Weight %.1f   Value %d   Count %d",item.weight,item.value,item.count);
     if(item.equipped)ImGui::TextColored({.5f,1,.55f,1},"Equipped");if(item.quest)ImGui::TextColored({1,.8f,.35f,1},"Quest item - protected");
     if(!item.description.empty())ImGui::TextWrapped("%s",item.description.c_str());if(showIds)ImGui::TextDisabled("Form %08X",item.key.form);
-    if(item.usable)ImGui::TextDisabled("Right click: %s",item.verb.c_str());ImGui::TextDisabled("Drag to quick bar / R: recipe uses");
+    if(inventoryActions){if(item.usable)ImGui::TextDisabled("Right click: %s",item.verb.c_str());ImGui::TextDisabled("Drag to quick bar / R: recipe uses");}else ImGui::TextDisabled("Click to inspect and choose an action");
     ImGui::PopTextWrapPos();ImGui::EndTooltip();ImGui::PopStyleColor(2);
 }
 void chooseUses(const ItemView& item) {
@@ -128,7 +143,9 @@ void slot(const char* id,const ItemView* item,float x,float y,float size=60,int 
 void stevePreview(void* raw,float x,float y,float w,float h) {
     if(!triedSkin){triedSkin=true;ID3D11Resource* resource{};
         if(SUCCEEDED(DirectX::CreateDDSTextureFromFile(static_cast<ID3D11Device*>(raw),L"Data\\textures\\VoxelControls\\steve.dds",&resource,&steve))&&resource){ID3D11Texture2D* texture{};
-            if(SUCCEEDED(resource->QueryInterface(__uuidof(ID3D11Texture2D),reinterpret_cast<void**>(&texture)))){D3D11_TEXTURE2D_DESC desc{};texture->GetDesc(&desc);skinWidth=float(desc.Width);skinHeight=float(desc.Height);texture->Release();}resource->Release();}}
+            if(SUCCEEDED(resource->QueryInterface(__uuidof(ID3D11Texture2D),reinterpret_cast<void**>(&texture))))texture->Release();
+            // prepare-steve scales the 64x64 skin to 1024x1024; UVs stay normalized to the source atlas.
+            resource->Release();}}
     bevel(x,y,w,h,IM_COL32(35,37,38,255),true);box(x+20,y+h-18,w-40,5,IM_COL32(21,23,23,255));
     const float unit=(h-30)/32,cx=x+w/2;
     auto part=[&](float px,float py,float pw,float ph,float u,float v,float uw,float vh,ImU32 fallback){const auto min=point(cx+px*unit,y+12+py*unit),max=point(cx+(px+pw)*unit,y+12+(py+ph)*unit);
@@ -213,7 +230,7 @@ void drawInventory(const Snapshot& state,void* device) {
     const char* sortNames[]{"Name","Weight","Value"};
     if(button("sort",std::string("Sort: ")+sortNames[int(sorting)],674,733,146,36)){sorting=ItemSort((int(sorting)+1)%3);page=0;}
     if(button("clear","Clear",828,733,60,36)){search[0]=0;page=0;}
-    text(270,787,"Shift+E / Esc: close     Right click: use     Middle click: unpin",dim,14);
+    text(270,787,"E / Esc / Tab: close     Right click: use     Middle click: unpin",dim,14);
     text(944,20,"Recipe browser",ink,23);text(944,52,"Alchemy + spell matrices",dim,16);
     inputBox("##recipe-search","Search recipes...",recipeSearch,sizeof(recipeSearch),944,84,304);
     float recipeY=143;int matches=0;
@@ -228,14 +245,139 @@ void drawInventory(const Snapshot& state,void* device) {
     if(!matches)text(957,173,"No matching recipes",dim,18);
     box(944,589,304,2,IM_COL32(140,140,140,255));text(944,608,"Recipe information",ink,19);text(944,640,recipe.description,dim,16,304);
     text(944,704,recipe.spell?"Consumes reagents once. Teaches a real Skyrim spell.":"Uses carried ingredients. Output enters your Skyrim inventory.",dim,15,304);
-    if(button("native","Skyrim inventory",944,772,195,30))enqueue(Action::NativeInventory);
+    if(button("native","More item actions",944,772,195,30))enqueue(Action::NativeInventory);
     if(button("ids","IDs",1150,772,98,30,true,showIds))showIds=!showIds;
     if(!state.status.empty())ImGui::GetForegroundDrawList()->AddText(ImGui::GetFont(),17*scale,point(250,833),white,state.status.c_str());
     ImGui::SetNextWindowPos({display.x/2,display.y/2},ImGuiCond_Appearing,{.5f,.5f});
-    if(ImGui::BeginPopupModal("Drop one item?",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
+    if(confirmation("Drop one item?")) {
         ImGui::TextUnformatted(item?item->name.c_str():"Item no longer available");ImGui::TextUnformatted("Drop one into the world?");
-        if(ImGui::Button("Drop one")&&item&&item->droppable){enqueue(Action::DropItem,0,item->key);ImGui::CloseCurrentPopup();}ImGui::SameLine();if(ImGui::Button("Cancel"))ImGui::CloseCurrentPopup();ImGui::EndPopup();
+        if(ImGui::Button("Drop one")&&item&&item->droppable){enqueue(Action::DropItem,0,item->key);ImGui::CloseCurrentPopup();}ImGui::SameLine();if(ImGui::Button("Cancel"))ImGui::CloseCurrentPopup();endConfirmation();
     }
     ImGui::End();ImGui::PopStyleVar(2);
 }
+void drawNativeMenus(const Snapshot& state) {
+    const auto& view=state.nativeMenu;if(view.kind==MenuKind::None)return;
+    const auto display=ImGui::GetIO().DisplaySize;
+    scale=std::clamp(std::min((display.x-48)/1268.f,(display.y-76)/820.f),.65f,1.45f);
+    originX=(display.x-1268*scale)/2;originY=(display.y-820*scale)/2;
+    static std::uint64_t previousSession{};static ItemKey selection;
+    static char query[128]{};static int externalPage{},playerPage{},topicPage{},quantity=1;
+    static ItemFilter category=ItemFilter::All;
+    if(previousSession!=view.session){previousSession=view.session;selection={};query[0]=0;externalPage=playerPage=topicPage=0;quantity=1;category=ItemFilter::All;}
+    auto send=[&](MenuAction action,int value=0,ItemKey item={},int price=0,std::string valueText={}){enqueueMenu({action,view.session,item,value,price,std::move(valueText)});};
+    ImGui::SetNextWindowPos({0,0});ImGui::SetNextWindowSize(display);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{0,0});ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize,0);
+    ImGui::Begin("Voxel native menus",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoBackground);
+    ImGui::SetWindowFontScale(scale);
+    if(view.kind==MenuKind::Dialogue) {
+        // Anchor to the right edge, outside the normal dialogue camera's face.
+        originX=display.x-1268*scale-28;
+        const float panelHeight=std::max(530.f,250.f+82.f*float(std::min<std::size_t>(6,view.topics.size()))),panelTop=820-panelHeight;
+        bevel(638,panelTop,630,panelHeight);text(664,panelTop+23,view.title.empty()?"Conversation":view.title,ink,26,566);
+        text(664,panelTop+65,view.choicesReady?"Choose a response":"Listening...",dim,17);
+        const int pages=std::max(1,int((view.topics.size()+5)/6));topicPage=std::clamp(topicPage,0,pages-1);
+        for(int row=0;row<6;++row){const int index=topicPage*6+row;if(index>=int(view.topics.size()))break;const auto& topic=view.topics[index];
+            const float y=panelTop+108+float(row)*82;const auto id="topic"+std::to_string(index);bool pressed=hit(id.c_str(),660,y,586,72);
+            bevel(660,y,586,72,view.choicesReady?(ImGui::IsItemHovered()?IM_COL32(216,226,211,255):panel):IM_COL32(159,159,159,255));
+            box(666,y+6,4,60,topic.fresh?accent:IM_COL32(121,120,118,255));
+            text(680,y+15,index<9?std::to_string(index+1):">",dim,18);
+            text(714,y+13,topic.text,view.choicesReady?ink:dim,18,514);
+            if(pressed&&view.choicesReady&&ImGui::IsMouseReleased(ImGuiMouseButton_Left))send(MenuAction::Topic,topic.index,{},0,topic.text);
+        }
+        if(pages>1){if(button("topicprev","<",664,690,40,30,topicPage>0))--topicPage;text(720,696,std::to_string(topicPage+1)+" / "+std::to_string(pages),dim,16);if(button("topicnext",">",800,690,40,30,topicPage+1<pages))++topicPage;}
+        if(button("skip","Continue [Space]",664,750,274,44,view.canSkip))send(MenuAction::Skip);
+        if(button("goodbye","Leave [Tab]",952,750,292,44,view.canExit))send(MenuAction::Close);
+        if(!view.subtitle.empty()&&view.subtitle!=" "){originX=(display.x-850*scale)/2;bevel(0,626,850,194,IM_COL32(40,40,46,250));text(22,647,view.title,IM_COL32(157,211,163,255),21);text(22,684,view.subtitle,white,21,806);}
+    } else if(view.kind==MenuKind::Hub) {
+        ImGui::GetWindowDrawList()->AddRectFilled({0,0},display,IM_COL32(10,12,16,155));
+        bevel(150,96,968,630);text(184,127,"Adventure menu",ink,31);text(184,173,view.playerName+" / Level "+std::to_string(view.level),dim,20);
+        text(770,139,std::to_string(view.gold)+" gold",ink,21);text(770,175,std::format("Carry {:.0f} / {:.0f}",view.carryWeight,view.carryLimit),dim,18);
+        struct Hub {const char* title;const char* info;ItemIcon icon;int entry;};
+        const Hub entries[]{{"Inventory","Equipment, items and supplies",ItemIcon::Chest,3},{"Magic","Spells and the spell matrix",ItemIcon::Scroll,2},{view.levelUp?"Level up":"Skills","Perks, skills and advancement",ItemIcon::Sword,1},{"World map","Locations, markers and travel",ItemIcon::Book,4}};
+        for(int i=0;i<4;++i){const float x=184.f+float(i%2)*458,y=230.f+float(i/2)*164;auto& option=entries[i];const auto id="hub"+std::to_string(i);
+            bool pressed=hit(id.c_str(),x,y,436,145);bevel(x,y,436,145,ImGui::IsItemHovered()?IM_COL32(215,221,213,255):panel);
+            bevel(x+18,y+25,88,88,slotFill,true);icon(option.icon,x+31,y+36,63);text(x+125,y+33,option.title,ink,25);text(x+125,y+80,option.info,dim,17,280);
+            if(pressed&&ImGui::IsMouseReleased(ImGuiMouseButton_Left))send(MenuAction::HubEntry,option.entry);
+        }
+        if(button("resume","Back to game [Tab]",184,588,894,52))send(MenuAction::Close);
+        text(184,666,"E Inventory     F Interact     F3 Debug     F5 Camera     F8 Workbench",dim,17);
+    } else {
+        ImGui::GetWindowDrawList()->AddRectFilled({0,0},display,IM_COL32(10,12,16,180));
+        bevel(0,0,232,820);bevel(248,0,660,820);bevel(924,0,344,820);
+        const bool trade=view.kind==MenuKind::Barter,own=view.kind==MenuKind::Inventory;
+        text(20,22,trade?"Trading":own?"Character":"Storage",ink,25);text(20,64,view.playerName,ink,20,190);
+        text(20,104,"Level "+std::to_string(view.level),dim,18);icon(ItemIcon::Coin,18,151,27);text(55,156,std::to_string(view.gold)+" gold",ink,20);
+        if(trade){text(20,211,"Merchant gold",dim,16);text(20,240,std::to_string(view.merchantGold),ink,24);}
+        text(20,306,"CARRY WEIGHT",dim,15);text(20,336,std::format("{:.0f} / {:.0f}",view.carryWeight,view.carryLimit),view.carryWeight>view.carryLimit?IM_COL32(170,48,44,255):ink,25);
+        bevel(20,376,192,18,slotFill,true);box(24,380,184*std::clamp(view.carryWeight/std::max(1.f,view.carryLimit),0.f,1.f),10,accent);
+        text(20,448,trade?"Buy and sell":view.containerMode==2?"Pickpocketing":view.containerMode==1?"Owned container":"Item browser",ink,20,190);
+        text(20,492,trade?"Select an item to see its price and choose a quantity.":view.containerMode==2?"Taking items may be noticed. The chance comes from Skyrim.":view.containerMode==1?"Taking owned items counts as stealing.":"Select an item in either grid. Use the action panel to move or equip it.",dim,18,188);
+        text(20,717,"E / Tab / Esc: close\nSearch by name or @source",dim,16,190);
+        text(270,21,view.title.empty()?"Inventory":view.title,ink,25,560);
+        if(button("native-close","X",860,17,28,28))send(MenuAction::Close);
+        inputBox("##native-search","Search items...  @source",query,sizeof(query),270,66,610);
+        const char* filters[]{"All","Gear","Supplies","Books","Materials","Keys"};
+        for(int i=0;i<6;++i)if(button(filters[i],filters[i],270+float(i)*103,116,98,29,true,int(category)==i)){category=ItemFilter(i);externalPage=playerPage=0;}
+        const NativeItemView* chosen=nullptr;for(const auto& item:view.items)if(item.item.key==selection){chosen=&item;break;}
+        auto grid=[&](bool playerSide,float y,int& currentPage,const char* label){
+            std::vector<const NativeItemView*> items;for(const auto& item:view.items)if(item.player==playerSide&&itemMatches(item.item,category,query))items.push_back(&item);
+            std::stable_sort(items.begin(),items.end(),[](auto a,auto b){return lowerText(a->item.name)<lowerText(b->item.name);});
+            const int pages=int(inventoryPageCount(items.size()));currentPage=std::clamp(currentPage,0,pages-1);
+            text(270,y,label,dim,18);text(566,y,std::to_string(items.size())+" stacks",dim,15);
+            const std::string prefix=playerSide?"player":"external";
+            if(button((prefix+"prev").c_str(),"<",750,y-5,30,27,currentPage>0))--currentPage;
+            text(792,y,std::to_string(currentPage+1)+"/"+std::to_string(pages),dim,15);
+            if(button((prefix+"next").c_str(),">",858,y-5,30,27,currentPage+1<pages))++currentPage;
+            for(int i=0;i<27;++i){int index=currentPage*27+i;auto item=index<int(items.size())?items[index]:nullptr;const float x=270.f+float(i%9)*68,sy=y+34+float(i/9)*66;
+                const auto id=prefix+std::to_string(i);bool pressed=hit(id.c_str(),x,sy,62,62);const bool hovered=ImGui::IsItemHovered();
+                bevel(x,sy,62,62,hovered?IM_COL32(177,177,177,255):slotFill,true);
+                if(item){icon(item->item.icon,x+9,sy+7,44,item->item.tint);if(item->item.count>1)text(x+55-float(std::to_string(item->item.count).size())*9,sy+40,std::to_string(item->item.count),white,18);
+                    if(item->item.equipped)box(x+5,sy+5,6,6,IM_COL32(97,223,124,255));if(item->item.quest)box(x+48,sy+5,6,6,IM_COL32(255,219,113,255));
+                    if(item->item.key==selection)ImGui::GetWindowDrawList()->AddRect(point(x+2,sy+2),point(x+60,sy+60),IM_COL32(255,236,154,255),0,0,2*scale);
+                    if(!item->enabled)box(x+4,sy+4,54,54,IM_COL32(40,40,40,115));
+                    if(pressed&&ImGui::IsMouseReleased(ImGuiMouseButton_Left)){selection=item->item.key;quantity=1;send(MenuAction::SelectItem,0,selection);}
+                    if(hovered){tooltip(item->item,false);}
+                }
+            }
+            if(items.empty())text(430,y+123,"No matching items",white,19);
+        };
+        if(!own){grid(false,177,externalPage,trade?"Merchant offers":"Container");grid(true,478,playerPage,trade?"Your inventory / sell":"Your inventory");}
+        else {grid(true,184,playerPage,"Your inventory");text(270,490,"Additional item actions",ink,23);text(270,536,"Equip, read, drink, apply poison or drop an item. Select a slot, then use the action panel.",dim,20,594);text(270,650,"Open the main inventory with E for equipment slots, portable crafting and the recipe browser.",dim,18,594);}
+        text(270,776,view.message.empty()?"Select a slot to inspect it. Items stay in their real inventories.":view.message,dim,15,610);
+        text(946,22,trade?"Trade details":"Item details",ink,24);
+        if(chosen){const auto& item=chosen->item;icon(item.icon,948, 70,54,item.tint);
+            ImGui::GetWindowDrawList()->PushClipRect(point(1014,73),point(1244,138),true);text(1014,73,item.name,item.enchanted?IM_COL32(118,65,161,255):ink,21,226);ImGui::GetWindowDrawList()->PopClipRect();
+            text(946,141,item.source,IM_COL32(56,81,159,255),16,296);
+            text(946,185,std::format("Count {}   Weight {:.1f}",item.count,item.weight),dim,18);
+            text(946,221,trade?std::format("{} price: {} gold",chosen->player?"Sell":"Buy",chosen->price):std::format("Value: {} gold",item.value),ink,21,296);
+            if(item.damage)text(946,258,std::format("Damage {:.1f}",item.damage),dim,18);if(item.armor)text(946,258,std::format("Base armor {:.1f}",item.armor),dim,18);
+            ImGui::GetWindowDrawList()->PushClipRect(point(946,302),point(1244,442),true);text(946,302,item.description,dim,17,294);ImGui::GetWindowDrawList()->PopClipRect();
+            if(view.containerMode==2&&view.pickpocketChance>=0)text(946,449,std::to_string(view.pickpocketChance)+"% chance",IM_COL32(162,83,36,255),20);
+            if(item.quest)text(946,473,"QUEST ITEM - protected",IM_COL32(126,87,25,255),17);
+            quantity=std::clamp(quantity,1,std::max(1,item.count));text(946,514,"Quantity",dim,17);
+            if(button("less","-",946,548,48,37,quantity>1))--quantity;text(1017,558,std::to_string(quantity),ink,19);
+            if(button("more","+",1080,548,48,37,quantity<item.count))++quantity;
+            if(button("stack","Stack",1140,548,104,37))quantity=item.count;
+            const std::int64_t total=std::int64_t(chosen->price)*quantity;
+            if(trade)text(946,610,std::format("Total: {} gold",total),ink,23);
+            std::string verb=own?(item.usable?item.verb:"Use"):trade?(chosen->player?"Sell":"Buy"):chosen->player?"Store":view.containerMode==1||view.containerMode==2?"Steal":"Take";
+            bool permitted=chosen->enabled&&!(chosen->player&&item.quest&&!own)&&(!own||item.usable||item.kind==ItemKind::Potion);
+            if(trade)permitted=permitted&&chosen->price>=0&&total<=(chosen->player?view.merchantGold:view.gold);
+            if(button("primary",verb+" "+(own?std::string{}:std::to_string(quantity)),946,657,298,47,permitted)){
+                if(trade||(!chosen->player&&(view.containerMode==1||view.containerMode==2)))ImGui::OpenPopup("Confirm transfer");
+                else send(own?MenuAction::Equip:MenuAction::Transfer,quantity,selection,chosen->price);
+            }
+            if(own&&button("native-drop","Drop selected quantity",946,719,298,40,item.droppable))ImGui::OpenPopup("Confirm drop");
+            if(confirmation("Confirm transfer")){
+                ImGui::TextWrapped("%s %d x %s?",verb.c_str(),quantity,item.name.c_str());if(trade)ImGui::Text("Total: %lld gold",static_cast<long long>(total));else ImGui::TextUnformatted("This is stealing. Skyrim applies its normal consequences.");
+                if(ImGui::Button("Confirm")){send(MenuAction::Transfer,quantity,selection,chosen->price);ImGui::CloseCurrentPopup();}ImGui::SameLine();if(ImGui::Button("Cancel"))ImGui::CloseCurrentPopup();endConfirmation();
+            }
+            if(confirmation("Confirm drop")){
+                ImGui::Text("Drop %d x %s?",quantity,item.name.c_str());if(ImGui::Button("Drop")){send(MenuAction::Drop,quantity,selection);ImGui::CloseCurrentPopup();}ImGui::SameLine();if(ImGui::Button("Cancel"))ImGui::CloseCurrentPopup();endConfirmation();
+            }
+        } else {bevel(946,84,298,150,slotFill,true);icon(ItemIcon::Bag,1055,112,86);text(946,273,"Select an item",ink,24);text(946,321,"Item information, effects, quantities and available actions appear here.",dim,19,294);}
+    }
+    ImGui::End();ImGui::PopStyleVar(2);
+}
+
 }
